@@ -1,0 +1,13 @@
+/* D-DIN (Datto, SIL OFL 1.1) + "HUD Figures" (tabular digits derived from D-DIN, same license).
+   HUD Figures only covers 0-9, U+2212 and U+2009, so listing it first gives tabular numbers
+   everywhere while letters fall through to D-DIN. See docs/assets/ui.md. */
+@font-face { font-family: 'D-DIN'; src: url('/fonts/D-DIN.woff2') format('woff2'); font-weight: 400; font-display: block; }
+@font-face { font-family: 'D-DIN'; src: url('/fonts/D-DIN-Bold.woff2') format('woff2'); font-weight: 700; font-display: block; }
+@font-face { font-family: 'D-DIN Exp'; src: url('/fonts/D-DINExp.woff2') format('woff2'); font-weight: 400; font-display: block; }
+@font-face { font-family: 'D-DIN Exp'; src: url('/fonts/D-DINExp-Bold.woff2') format('woff2'); font-weight: 700; font-display: block; }
+@font-face { font-family: 'D-DIN Condensed'; src: url('/fonts/D-DINCondensed.woff2') format('woff2'); font-weight: 400; font-display: block; }
+@font-face { font-family: 'D-DIN Condensed'; src: url('/fonts/D-DINCondensed-Bold.woff2') format('woff2'); font-weight: 700; font-display: block; }
+@font-face { font-family: 'HUD Figures'; src: url('/fonts/HUDFigures-Regular.woff') format('woff'); font-weight: 400; unicode-range: U+0030-0039, U+2009, U+2212; font-display: block; }
+@font-face { font-family: 'HUD Figures'; src: url('/fonts/HUDFigures-Bold.woff') format('woff'); font-weight: 700; unicode-range: U+0030-0039, U+2009, U+2212; font-display: block; }
+@font-face { font-family: 'HUD Figures Exp'; src: url('/fonts/HUDFiguresExp-Regular.woff') format('woff'); font-weight: 400; unicode-range: U+0030-0039, U+2009, U+2212; font-display: block; }
+@font-face { font-family: 'HUD Figures Exp'; src: url('/fonts/HUDFiguresExp-Bold.woff') format('woff'); font-weight: 700; unicode-range: U+0030-0039, U+2009, U+2212; font-display: block; }

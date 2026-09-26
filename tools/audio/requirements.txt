@@ -1,0 +1,8 @@
+# offline audio tooling (python -m venv tools/audio/.venv && tools/audio/.venv/bin/pip install -r tools/audio/requirements.txt)
+kokoro-onnx==0.6.1      # TTS runtime (MIT); model: Kokoro-82M v1.0 ONNX (Apache-2.0)
+numpy
+scipy
+soundfile
+pyloudnorm==0.2.0
+faster-whisper==1.2.1   # optional: ASR intelligibility check of generated clips
+# capture.py uses the system python3 with playwright + chromium installed

@@ -1,0 +1,31 @@
+{
+ "milkyway": {
+  "scale": 0.5227383375167847,
+  "gamma": 2.2,
+  "frame": "equatorial ICRS, u=RA (0 at center? see shader)"
+ },
+ "terrain": {
+  "t1": {
+   "cx": 8000.0,
+   "cz": 2000.0,
+   "size": 40000.0,
+   "hN": 2048,
+   "iN": 4096,
+   "heightScale": 0.1
+  },
+  "t2": {
+   "cx": 100000.0,
+   "cz": 50000.0,
+   "size": 400000.0,
+   "hN": 2048,
+   "iN": 4096,
+   "heightScale": 0.1
+  }
+ },
+ "region": {
+  "lat0": 18.0,
+  "lat1": 42.0,
+  "lon0": -130.0,
+  "lon1": -106.0
+ }
+}

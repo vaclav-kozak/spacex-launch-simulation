@@ -3,3 +3,6 @@ dist
 *.log
 .DS_Store
 shots/
+tools/audio/.venv
+__pycache__/
+*.blend1

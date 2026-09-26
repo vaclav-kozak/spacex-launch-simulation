@@ -1,0 +1,160 @@
+/* Viewport label overlays (webcast style). OWNER: cameras. */
+@font-face {
+  font-family: 'CamDIN';
+  src: url('/fonts/D-DIN.woff2') format('woff2');
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'CamDIN';
+  src: url('/fonts/D-DIN-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-display: swap;
+}
+
+.camlayer {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  isolation: isolate;
+  overflow: hidden;
+  font-family: 'CamDIN', 'D-DIN', 'DIN Alternate', 'Barlow Semi Condensed', 'Helvetica Neue', Arial, sans-serif;
+  color: #fff;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.camlayer.cam-hidden-labels .camvp-label { opacity: 0 !important; visibility: hidden; }
+
+.camvp {
+  position: absolute;
+  left: 0;
+  top: 0;
+  box-sizing: border-box;
+  cursor: grab;
+  touch-action: none;
+  contain: layout style;
+}
+.camvp.cam-dragging { cursor: grabbing; }
+.camvp.cam-can-max { cursor: zoom-in; }
+.camvp.cam-is-max { cursor: zoom-out; }
+.camvp.cam-dragging.cam-can-max, .camvp.cam-dragging.cam-is-max { cursor: grabbing; }
+
+.camvp-fade {
+  position: absolute;
+  inset: 0;
+  background: #000;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* thin frame on picture-in-picture thumbnails */
+.camvp-frame {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0);
+  transition: box-shadow 0.35s ease;
+}
+.camvp.cam-pip .camvp-frame { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.38), 0 6px 26px rgba(0, 0, 0, 0.55); }
+.camvp.cam-pip:hover .camvp-frame { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.75), 0 6px 26px rgba(0, 0, 0, 0.55); }
+
+.camvp-label {
+  position: absolute;
+  left: 22px;
+  top: 20px;
+  pointer-events: none;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55), 0 0 14px rgba(0, 0, 0, 0.35);
+  transition: opacity 0.4s ease;
+  white-space: nowrap;
+  max-width: calc(100% - 44px);
+}
+.camvp-text {
+  padding: 1px 0 1px 11px;
+  border-left: 2px solid rgba(255, 255, 255, 0.78);
+}
+.camvp-name {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.24em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+.camvp-tel {
+  margin-top: 7px;
+  display: flex;
+  gap: 16px;
+  font-size: 19px;
+  line-height: 1;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+.camvp-tel b { font-weight: 400; }
+.camvp-tel i {
+  font-style: normal;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  margin-left: 4px;
+  opacity: 0.72;
+}
+.camvp-sub {
+  margin-top: 7px;
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  line-height: 1;
+  text-transform: uppercase;
+  opacity: 0.78;
+}
+.camvp-sub .cam-ph { color: #fff; }
+.camvp-sub .cam-sep { display: inline-block; width: 3px; height: 3px; border-radius: 50%; background: currentColor; margin: 0 9px; vertical-align: middle; opacity: 0.7; }
+.camvp-sub .cam-md { opacity: 0.72; }
+.camvp.cam-single .camvp-tel { display: none; }
+.camvp.cam-single .camvp-sub .cam-ph, .camvp.cam-single .camvp-sub .cam-sep { display: none; }
+
+.camvp-modes {
+  margin-top: 11px;
+  display: flex;
+  gap: 2px;
+  pointer-events: auto;
+  opacity: 0;
+  transform: translateY(-3px);
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+.camvp:hover .camvp-modes, .camvp.cam-show-modes .camvp-modes { opacity: 1; transform: none; }
+.camvp-modes button {
+  appearance: none;
+  border: 0;
+  margin: 0;
+  padding: 5px 8px 4px;
+  font: inherit;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.7);
+  background: rgba(8, 10, 14, 0.42);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  cursor: pointer;
+  text-shadow: none;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.camvp-modes button:first-child { border-radius: 2px 0 0 2px; }
+.camvp-modes button:last-child { border-radius: 0 2px 2px 0; }
+.camvp-modes button:hover { color: #fff; background: rgba(40, 46, 58, 0.6); }
+.camvp-modes button.on { color: #0a0c10; background: rgba(255, 255, 255, 0.9); }
+.camvp-modes button:focus-visible { outline: 1px solid #fff; outline-offset: 1px; }
+
+/* compact label on small viewports / PiPs */
+.camvp.cam-compact .camvp-label { left: 12px; top: 10px; }
+.camvp.cam-compact .camvp-text { padding-left: 8px; }
+.camvp.cam-compact .camvp-text {
+  padding: 1px 0 1px 11px;
+  border-left: 2px solid rgba(255, 255, 255, 0.78);
+}
+.camvp-name { font-size: 10.5px; letter-spacing: 0.2em; }
+.camvp.cam-compact .camvp-tel { font-size: 14px; gap: 10px; margin-top: 5px; }
+.camvp.cam-compact .camvp-tel i { font-size: 8.5px; }
+.camvp.cam-compact .camvp-sub { display: none; }
+.camvp.cam-compact .camvp-modes { display: none; }

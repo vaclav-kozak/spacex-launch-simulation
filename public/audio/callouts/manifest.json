@@ -1,0 +1,1517 @@
+{
+ "version": 1,
+ "generator": "tools/audio/gen_callouts.py",
+ "tts": "Kokoro-82M v1.0 (Apache-2.0)",
+ "lines": [
+  {
+   "id": "host_welcome",
+   "text": "Welcome to Vandenberg Space Force Base, where Falcon 9 is about to launch another batch of Starlink satellites.",
+   "key": "welcome to vandenberg space force base where falcon 9 is about to launch another batch of starlink satellites",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_welcome.mp3",
+   "dur": 6.872,
+   "src": "bbb115fa00c4"
+  },
+  {
+   "id": "lc_startup",
+   "text": "Falcon 9 is in startup.",
+   "key": "falcon 9 is in startup",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_startup.mp3",
+   "dur": 1.922,
+   "src": "e1de44a6446d"
+  },
+  {
+   "id": "host_ship_ready",
+   "text": "The droneship Of Course I Still Love You is on station in the Pacific, ready to catch the booster.",
+   "key": "the droneship of course i still love you is on station in the pacific ready to catch the booster",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_ship_ready.mp3",
+   "dur": 5.37,
+   "src": "87a48c212400"
+  },
+  {
+   "id": "lc_go_for_launch",
+   "text": "Launch director has verified go for launch.",
+   "key": "launch director has verified go for launch",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_go_for_launch.mp3",
+   "dur": 2.704,
+   "src": "1ae5e67dbb7e"
+  },
+  {
+   "id": "host_t30",
+   "text": "T minus thirty seconds.",
+   "key": "t minus 30 seconds",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_t30.mp3",
+   "dur": 1.422,
+   "src": "1da5ce0f0b7f"
+  },
+  {
+   "id": "lc_t15",
+   "text": "T minus fifteen.",
+   "key": "t minus 15",
+   "voice": "lc",
+   "kind": "count",
+   "file": "lc_t15.mp3",
+   "dur": 1.085,
+   "src": "339a6b02139d"
+  },
+  {
+   "id": "lc_10",
+   "text": "Ten.",
+   "key": "10",
+   "voice": "lc",
+   "kind": "count",
+   "file": "lc_10.mp3",
+   "dur": 0.486,
+   "src": "32d954e8e7cb"
+  },
+  {
+   "id": "lc_9",
+   "text": "Nine.",
+   "key": "9",
+   "voice": "lc",
+   "kind": "count",
+   "file": "lc_9.mp3",
+   "dur": 0.531,
+   "src": "bb81644d0ab2"
+  },
+  {
+   "id": "lc_8",
+   "text": "Eight.",
+   "key": "8",
+   "voice": "lc",
+   "kind": "count",
+   "file": "lc_8.mp3",
+   "dur": 0.507,
+   "src": "db3437aa6347"
+  },
+  {
+   "id": "lc_7",
+   "text": "Seven.",
+   "key": "7",
+   "voice": "lc",
+   "kind": "count",
+   "file": "lc_7.mp3",
+   "dur": 0.579,
+   "src": "15fdfdf8bfad"
+  },
+  {
+   "id": "lc_6",
+   "text": "Six.",
+   "key": "6",
+   "voice": "lc",
+   "kind": "count",
+   "file": "lc_6.mp3",
+   "dur": 0.558,
+   "src": "96bbff46ec73"
+  },
+  {
+   "id": "lc_5",
+   "text": "Five.",
+   "key": "5",
+   "voice": "lc",
+   "kind": "count",
+   "file": "lc_5.mp3",
+   "dur": 0.516,
+   "src": "c59b525f229e"
+  },
+  {
+   "id": "lc_4",
+   "text": "Four.",
+   "key": "4",
+   "voice": "lc",
+   "kind": "count",
+   "file": "lc_4.mp3",
+   "dur": 0.536,
+   "src": "5b43077606a0"
+  },
+  {
+   "id": "lc_ignition",
+   "text": "Ignition sequence start.",
+   "key": "ignition sequence start",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_ignition.mp3",
+   "dur": 1.633,
+   "src": "bc5e36036678"
+  },
+  {
+   "id": "lc_2",
+   "text": "Two.",
+   "key": "2",
+   "voice": "lc",
+   "kind": "count",
+   "file": "lc_2.mp3",
+   "dur": 0.485,
+   "src": "91565afcf4f8"
+  },
+  {
+   "id": "lc_1",
+   "text": "One.",
+   "key": "1",
+   "voice": "lc",
+   "kind": "count",
+   "file": "lc_1.mp3",
+   "dur": 0.468,
+   "src": "4b74309f99a3"
+  },
+  {
+   "id": "lc_0",
+   "text": "Zero.",
+   "key": "0",
+   "voice": "lc",
+   "kind": "count",
+   "file": "lc_0.mp3",
+   "dur": 0.613,
+   "src": "df6be8cb585c"
+  },
+  {
+   "id": "lc_liftoff",
+   "text": "Liftoff.",
+   "key": "liftoff",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_liftoff.mp3",
+   "dur": 0.936,
+   "src": "28ef46fc5401"
+  },
+  {
+   "id": "host_liftoff",
+   "text": "And liftoff of Falcon 9 and Starlink!",
+   "key": "and liftoff of falcon 9 and starlink",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_liftoff.mp3",
+   "dur": 2.288,
+   "src": "b7bb60dcd20b"
+  },
+  {
+   "id": "lc_hold",
+   "text": "Hold, hold, hold.",
+   "key": "hold hold hold",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_hold.mp3",
+   "dur": 1.353,
+   "src": "72a68e62f97d"
+  },
+  {
+   "id": "lc_holding",
+   "text": "We are holding the count.",
+   "key": "we are holding the count",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_holding.mp3",
+   "dur": 1.56,
+   "src": "a4bb1177a3c4"
+  },
+  {
+   "id": "lc_resume",
+   "text": "Resuming the count.",
+   "key": "resuming the count",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_resume.mp3",
+   "dur": 1.371,
+   "src": "c21bea3095eb"
+  },
+  {
+   "id": "lc_abort",
+   "text": "Abort, abort, abort. Engine shutdown.",
+   "key": "abort abort abort engine shutdown",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_abort.mp3",
+   "dur": 2.925,
+   "src": "76461983fb50"
+  },
+  {
+   "id": "lc_recycle",
+   "text": "Recycling the count to T minus sixty seconds.",
+   "key": "recycling the count to t minus 60 seconds",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_recycle.mp3",
+   "dur": 3.146,
+   "src": "2f02e55b44aa"
+  },
+  {
+   "id": "lc_cleared_tower",
+   "text": "Vehicle has cleared the tower.",
+   "key": "vehicle has cleared the tower",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_cleared_tower.mp3",
+   "dur": 1.78,
+   "src": "04dc19db6075"
+  },
+  {
+   "id": "lc_s1_nominal",
+   "text": "Stage one propulsion is nominal.",
+   "key": "stage 1 propulsion is nominal",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_s1_nominal.mp3",
+   "dur": 2.291,
+   "src": "ccd1e3016cb5"
+  },
+  {
+   "id": "lc_supersonic",
+   "text": "Vehicle is supersonic.",
+   "key": "vehicle is supersonic",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_supersonic.mp3",
+   "dur": 1.714,
+   "src": "5ea04c82746b"
+  },
+  {
+   "id": "lc_throttle_down",
+   "text": "Throttling down.",
+   "key": "throttling down",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_throttle_down.mp3",
+   "dur": 1.295,
+   "src": "620a54ae827d"
+  },
+  {
+   "id": "lc_maxq",
+   "text": "Max Q.",
+   "key": "max q",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_maxq.mp3",
+   "dur": 1.035,
+   "src": "8dd2a5f08c7a"
+  },
+  {
+   "id": "host_maxq",
+   "text": "Falcon 9 is passing through max Q, the moment of peak mechanical stress on the rocket.",
+   "key": "falcon 9 is passing through max q the moment of peak mechanical stress on the rocket",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_maxq.mp3",
+   "dur": 5.498,
+   "src": "a545c47460c8"
+  },
+  {
+   "id": "lc_throttle_up",
+   "text": "Throttle up.",
+   "key": "throttle up",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_throttle_up.mp3",
+   "dur": 1.077,
+   "src": "d99a76edad2d"
+  },
+  {
+   "id": "lc_meco",
+   "text": "MECO.",
+   "key": "meco",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_meco.mp3",
+   "dur": 0.887,
+   "src": "cffe3f972916"
+  },
+  {
+   "id": "lc_stage_sep",
+   "text": "Stage separation confirmed.",
+   "key": "stage separation confirmed",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_stage_sep.mp3",
+   "dur": 1.973,
+   "src": "9d211dfa209b"
+  },
+  {
+   "id": "lc_mvac_ignition",
+   "text": "MVac ignition.",
+   "key": "mvac ignition",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_mvac_ignition.mp3",
+   "dur": 1.359,
+   "src": "1d5c95d870ae"
+  },
+  {
+   "id": "host_s2_burning",
+   "text": "The second stage engine is burning, and we have a good MVac plume.",
+   "key": "the second stage engine is burning and we have a good mvac plume",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_s2_burning.mp3",
+   "dur": 3.801,
+   "src": "461ced92a073"
+  },
+  {
+   "id": "lc_fairing_sep",
+   "text": "Fairing separation confirmed.",
+   "key": "fairing separation confirmed",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_fairing_sep.mp3",
+   "dur": 1.949,
+   "src": "320235aa3421"
+  },
+  {
+   "id": "host_fairing",
+   "text": "The fairing halves have separated and will parachute down to the ocean for recovery.",
+   "key": "the fairing halves have separated and will parachute down to the ocean for recovery",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_fairing.mp3",
+   "dur": 4.439,
+   "src": "eaf4da9b3503"
+  },
+  {
+   "id": "lc_s2_nominal",
+   "text": "Stage two propulsion is nominal.",
+   "key": "stage 2 propulsion is nominal",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_s2_nominal.mp3",
+   "dur": 2.201,
+   "src": "56d03bff655e"
+  },
+  {
+   "id": "lc_seco",
+   "text": "SECO.",
+   "key": "seco",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_seco.mp3",
+   "dur": 0.895,
+   "src": "b9395a16d854"
+  },
+  {
+   "id": "host_orbit",
+   "text": "Second stage engine cutoff, and we are in a nominal parking orbit.",
+   "key": "second stage engine cutoff and we are in a nominal parking orbit",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_orbit.mp3",
+   "dur": 4.12,
+   "src": "3a1223714f0e"
+  },
+  {
+   "id": "lc_deploy",
+   "text": "Starlink deployment confirmed.",
+   "key": "starlink deployment confirmed",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_deploy.mp3",
+   "dur": 1.998,
+   "src": "2c7a271aa580"
+  },
+  {
+   "id": "host_deploy",
+   "text": "All Starlink satellites have been successfully deployed. That concludes our mission.",
+   "key": "all starlink satellites have been successfully deployed that concludes our mission",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_deploy.mp3",
+   "dur": 4.559,
+   "src": "722844119d4b"
+  },
+  {
+   "id": "lc_flip",
+   "text": "Stage one flip maneuver in progress.",
+   "key": "stage 1 flip maneuver in progress",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_flip.mp3",
+   "dur": 2.553,
+   "src": "cc3f56a5866c"
+  },
+  {
+   "id": "host_flip",
+   "text": "The first stage is using its cold gas thrusters to flip around, engines first.",
+   "key": "the first stage is using its cold gas thrusters to flip around engines first",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_flip.mp3",
+   "dur": 4.7,
+   "src": "ec1e41bc798f"
+  },
+  {
+   "id": "lc_gridfins",
+   "text": "Grid fins deployed.",
+   "key": "grid fins deployed",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_gridfins.mp3",
+   "dur": 1.551,
+   "src": "b6c059e37549"
+  },
+  {
+   "id": "host_apogee",
+   "text": "The booster has reached apogee and is starting to fall back toward the droneship.",
+   "key": "the booster has reached apogee and is starting to fall back toward the droneship",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_apogee.mp3",
+   "dur": 4.26,
+   "src": "58e5b691d9be"
+  },
+  {
+   "id": "lc_entry_start",
+   "text": "Entry burn startup.",
+   "key": "entry burn startup",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_entry_start.mp3",
+   "dur": 1.548,
+   "src": "f533063ae7f0"
+  },
+  {
+   "id": "lc_entry_end",
+   "text": "Entry burn shutdown.",
+   "key": "entry burn shutdown",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_entry_end.mp3",
+   "dur": 1.574,
+   "src": "f5927e3f2022"
+  },
+  {
+   "id": "host_entry",
+   "text": "Three engines relit to slow the booster down and protect it from the heat of reentry.",
+   "key": "3 engines relit to slow the booster down and protect it from the heat of reentry",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_entry.mp3",
+   "dur": 4.841,
+   "src": "e8e7d2802ef1"
+  },
+  {
+   "id": "lc_transonic",
+   "text": "Stage one transonic.",
+   "key": "stage 1 transonic",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_transonic.mp3",
+   "dur": 1.682,
+   "src": "e247eab3cb87"
+  },
+  {
+   "id": "host_gridfins_steer",
+   "text": "The grid fins are now steering the booster toward Of Course I Still Love You.",
+   "key": "the grid fins are now steering the booster toward of course i still love you",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_gridfins_steer.mp3",
+   "dur": 4.117,
+   "src": "8301cfde00c3"
+  },
+  {
+   "id": "lc_landing_start",
+   "text": "Landing burn startup.",
+   "key": "landing burn startup",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_landing_start.mp3",
+   "dur": 1.563,
+   "src": "421b7bf3376a"
+  },
+  {
+   "id": "lc_legs",
+   "text": "Landing legs deployed.",
+   "key": "landing legs deployed",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_legs.mp3",
+   "dur": 1.654,
+   "src": "5b3ff1cecee2"
+  },
+  {
+   "id": "host_landed",
+   "text": "The Falcon has landed!",
+   "key": "the falcon has landed",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_landed.mp3",
+   "dur": 1.356,
+   "src": "7bd92957820e"
+  },
+  {
+   "id": "lc_landed",
+   "text": "Stage one touchdown confirmed.",
+   "key": "stage 1 touchdown confirmed",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_landed.mp3",
+   "dur": 2.174,
+   "src": "73128d3967e6"
+  },
+  {
+   "id": "host_manual",
+   "text": "Manual landing mode. You have the controls.",
+   "key": "manual landing mode you have the controls",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_manual.mp3",
+   "dur": 2.564,
+   "src": "44c00140e026"
+  },
+  {
+   "id": "lc_manual_staging",
+   "text": "Manual stage separation commanded.",
+   "key": "manual stage separation commanded",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_manual_staging.mp3",
+   "dur": 2.352,
+   "src": "31e8d28ebbb6"
+  },
+  {
+   "id": "lc_manual_fairing",
+   "text": "Manual fairing separation commanded.",
+   "key": "manual fairing separation commanded",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_manual_fairing.mp3",
+   "dur": 2.427,
+   "src": "83eb46d104d7"
+  },
+  {
+   "id": "host_hard_landing",
+   "text": "That was a hard landing. The legs could not absorb the impact.",
+   "key": "that was a hard landing the legs could not absorb the impact",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_hard_landing.mp3",
+   "dur": 3.57,
+   "src": "323c642a3216"
+  },
+  {
+   "id": "host_tipped",
+   "text": "The booster has tipped over on the deck.",
+   "key": "the booster has tipped over on the deck",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_tipped.mp3",
+   "dur": 1.864,
+   "src": "17f6ee178dae"
+  },
+  {
+   "id": "host_offdeck",
+   "text": "The booster missed the droneship and went into the water.",
+   "key": "the booster missed the droneship and went into the water",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_offdeck.mp3",
+   "dur": 2.857,
+   "src": "bde36125bbd2"
+  },
+  {
+   "id": "host_splash_short",
+   "text": "The booster did not have the energy to reach the droneship and has splashed down in the ocean.",
+   "key": "the booster did not have the energy to reach the droneship and has splashed down in the ocean",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_splash_short.mp3",
+   "dur": 4.944,
+   "src": "fb7c17bd1aac"
+  },
+  {
+   "id": "host_booster_lost",
+   "text": "It looks like we have lost the booster.",
+   "key": "it looks like we have lost the booster",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_booster_lost.mp3",
+   "dur": 1.706,
+   "src": "bf88708c4519"
+  },
+  {
+   "id": "lc_s1_flameout",
+   "text": "Stage one engine flameout. Propellant depleted.",
+   "key": "stage 1 engine flameout propellant depleted",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_s1_flameout.mp3",
+   "dur": 3.414,
+   "src": "4c964e63ef59"
+  },
+  {
+   "id": "lc_anomaly",
+   "text": "We have lost telemetry from the vehicle. Vehicle anomaly.",
+   "key": "we have lost telemetry from the vehicle vehicle anomaly",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_anomaly.mp3",
+   "dur": 3.675,
+   "src": "cfd94a16a727"
+  },
+  {
+   "id": "host_anomaly",
+   "text": "It appears the vehicle has experienced an anomaly.",
+   "key": "it appears the vehicle has experienced an anomaly",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_anomaly.mp3",
+   "dur": 2.75,
+   "src": "cbdba5181f15"
+  },
+  {
+   "id": "lc_s2_flameout",
+   "text": "Premature second stage engine shutdown.",
+   "key": "premature second stage engine shutdown",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_s2_flameout.mp3",
+   "dur": 2.584,
+   "src": "ac3dc9ea2013"
+  },
+  {
+   "id": "host_no_orbit",
+   "text": "Unfortunately the second stage did not reach orbit.",
+   "key": "unfortunately the second stage did not reach orbit",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_no_orbit.mp3",
+   "dur": 3.209,
+   "src": "c9a88d8e49a3"
+  },
+  {
+   "id": "lc_mvac_failure",
+   "text": "MVac nozzle failure. Stage two engine shutdown.",
+   "key": "mvac nozzle failure stage 2 engine shutdown",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_mvac_failure.mp3",
+   "dur": 3.752,
+   "src": "0c9986772556"
+  },
+  {
+   "id": "host_payload_damaged",
+   "text": "The fairing separated too early. The satellites were likely damaged by aerodynamic heating.",
+   "key": "the fairing separated too early the satellites were likely damaged by aerodynamic heating",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_payload_damaged.mp3",
+   "dur": 5.562,
+   "src": "4840783b9fdb"
+  },
+  {
+   "id": "host_fairing_stuck",
+   "text": "The fairing never separated, so the satellites cannot be deployed.",
+   "key": "the fairing never separated so the satellites cannot be deployed",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_fairing_stuck.mp3",
+   "dur": 3.689,
+   "src": "09bab607c053"
+  },
+  {
+   "id": null,
+   "text": "Falcon 9 is configured for flight",
+   "key": "falcon 9 is configured for flight",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_falcon_9_is_configured_for_flight_13864a.mp3",
+   "dur": 2.361,
+   "src": "fcec9b8d8257"
+  },
+  {
+   "id": null,
+   "text": "FTS is armed",
+   "key": "fts is armed",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_fts_is_armed_f100b8.mp3",
+   "dur": 1.478,
+   "src": "bf82fd015c9c"
+  },
+  {
+   "id": null,
+   "text": "Go for launch",
+   "key": "go for launch",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_go_for_launch_8cd022.mp3",
+   "dur": 1.172,
+   "src": "1815a545ae32"
+  },
+  {
+   "id": null,
+   "text": "Stage 1 and stage 2 tanks are pressing for flight",
+   "key": "stage 1 and stage 2 tanks are pressing for flight",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_stage_1_and_stage_2_tanks_are_pressing_for_fligh_21e195.mp3",
+   "dur": 3.5,
+   "src": "5925f1c7ced3"
+  },
+  {
+   "id": null,
+   "text": "Stage 1 and stage 2 tanks pressing for flight",
+   "key": "stage 1 and stage 2 tanks pressing for flight",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_stage_1_and_stage_2_tanks_pressing_for_flight_c587d0.mp3",
+   "dur": 3.202,
+   "src": "5b7990bd5d89"
+  },
+  {
+   "id": null,
+   "text": "T minus 1 minute",
+   "key": "t minus 1 minute",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_t_minus_1_minute_991de6.mp3",
+   "dur": 1.558,
+   "src": "45c67ab45dd0"
+  },
+  {
+   "id": null,
+   "text": "T minus 60 seconds",
+   "key": "t minus 60 seconds",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_t_minus_60_seconds_fc9c1e.mp3",
+   "dur": 1.807,
+   "src": "e2e19342a052"
+  },
+  {
+   "id": null,
+   "text": "T minus 45 seconds",
+   "key": "t minus 45 seconds",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_t_minus_45_seconds_df50a2.mp3",
+   "dur": 2.083,
+   "src": "72991010de1f"
+  },
+  {
+   "id": null,
+   "text": "T minus 30 seconds",
+   "key": "t minus 30 seconds",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_t_minus_30_seconds_44aa3d.mp3",
+   "dur": 1.624,
+   "src": "825818d503c8"
+  },
+  {
+   "id": null,
+   "text": "T minus 20 seconds",
+   "key": "t minus 20 seconds",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_t_minus_20_seconds_994653.mp3",
+   "dur": 1.749,
+   "src": "5f069592efe8"
+  },
+  {
+   "id": null,
+   "text": "T minus 15 seconds",
+   "key": "t minus 15 seconds",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_t_minus_15_seconds_ef04c0.mp3",
+   "dur": 1.84,
+   "src": "2452e4f53d9f"
+  },
+  {
+   "id": null,
+   "text": "T minus 10 seconds",
+   "key": "t minus 10 seconds",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_t_minus_10_seconds_dc8e2d.mp3",
+   "dur": 1.596,
+   "src": "048385ef545d"
+  },
+  {
+   "id": null,
+   "text": "T minus 10",
+   "key": "t minus 10",
+   "voice": "lc",
+   "kind": "count",
+   "file": "lc_t_minus_10_f928cd.mp3",
+   "dur": 0.98,
+   "src": "a70ff46e1edd"
+  },
+  {
+   "id": null,
+   "text": "3",
+   "key": "3",
+   "voice": "lc",
+   "kind": "count",
+   "file": "lc_3_850997.mp3",
+   "dur": 0.54,
+   "src": "39a58d5b5b66"
+  },
+  {
+   "id": null,
+   "text": "Ignition",
+   "key": "ignition",
+   "voice": "lc",
+   "kind": "count",
+   "file": "lc_ignition_4b8f9f.mp3",
+   "dur": 0.692,
+   "src": "fd51d06e7e5b"
+  },
+  {
+   "id": null,
+   "text": "Engines full power",
+   "key": "engines full power",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_engines_full_power_5af72f.mp3",
+   "dur": 1.424,
+   "src": "16e4c923adf8"
+  },
+  {
+   "id": null,
+   "text": "Liftoff",
+   "key": "liftoff",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_liftoff_0c79b3.mp3",
+   "dur": 0.726,
+   "src": "b202b5359cd1"
+  },
+  {
+   "id": null,
+   "text": "And liftoff",
+   "key": "and liftoff",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_and_liftoff_f7cad7.mp3",
+   "dur": 0.852,
+   "src": "a28d7c890ac2"
+  },
+  {
+   "id": null,
+   "text": "Liftoff of Falcon 9",
+   "key": "liftoff of falcon 9",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_liftoff_of_falcon_9_4cff3a.mp3",
+   "dur": 1.504,
+   "src": "680e6d422cbb"
+  },
+  {
+   "id": null,
+   "text": "Falcon 9 has cleared the tower",
+   "key": "falcon 9 has cleared the tower",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_falcon_9_has_cleared_the_tower_47b348.mp3",
+   "dur": 1.892,
+   "src": "2ebdcbadc9ee"
+  },
+  {
+   "id": null,
+   "text": "Vehicle is pitching downrange",
+   "key": "vehicle is pitching downrange",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_vehicle_is_pitching_downrange_aa4c06.mp3",
+   "dur": 2.052,
+   "src": "78818678ecda"
+  },
+  {
+   "id": null,
+   "text": "Power and telemetry nominal",
+   "key": "power and telemetry nominal",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_power_and_telemetry_nominal_baead9.mp3",
+   "dur": 1.975,
+   "src": "e9cb0ba6f393"
+  },
+  {
+   "id": null,
+   "text": "Vehicle is passing through max Q",
+   "key": "vehicle is passing through max q",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_vehicle_is_passing_through_max_q_7cf31d.mp3",
+   "dur": 2.209,
+   "src": "29f6829dc2f2"
+  },
+  {
+   "id": null,
+   "text": "Throttling up",
+   "key": "throttling up",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_throttling_up_061bca.mp3",
+   "dur": 1.174,
+   "src": "a6b1715ffa61"
+  },
+  {
+   "id": null,
+   "text": "Main engine cutoff",
+   "key": "main engine cutoff",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_main_engine_cutoff_49bea5.mp3",
+   "dur": 1.595,
+   "src": "1d3817cae422"
+  },
+  {
+   "id": null,
+   "text": "MECO confirmed",
+   "key": "meco confirmed",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_meco_confirmed_1b4e1b.mp3",
+   "dur": 1.169,
+   "src": "92e2bd5832c9"
+  },
+  {
+   "id": null,
+   "text": "Stage separation",
+   "key": "stage separation",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_stage_separation_60ca46.mp3",
+   "dur": 1.465,
+   "src": "af881b1a4d7e"
+  },
+  {
+   "id": null,
+   "text": "Second stage engine ignition",
+   "key": "second stage engine ignition",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_second_stage_engine_ignition_853c8d.mp3",
+   "dur": 2.088,
+   "src": "5870f2f1af6c"
+  },
+  {
+   "id": null,
+   "text": "Fairing separation",
+   "key": "fairing separation",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_fairing_separation_1d12aa.mp3",
+   "dur": 1.407,
+   "src": "27f5f561b8de"
+  },
+  {
+   "id": null,
+   "text": "The fairing halves are descending under their parafoils",
+   "key": "the fairing halves are descending under their parafoils",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_the_fairing_halves_are_descending_under_their_pa_0541e7.mp3",
+   "dur": 2.893,
+   "src": "86ba878c5bf4"
+  },
+  {
+   "id": null,
+   "text": "Stage 1 flip maneuver",
+   "key": "stage 1 flip maneuver",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_stage_1_flip_maneuver_ea9c74.mp3",
+   "dur": 1.75,
+   "src": "9bf5fa0c021f"
+  },
+  {
+   "id": null,
+   "text": "Stage 1 apogee",
+   "key": "stage 1 apogee",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_stage_1_apogee_60c149.mp3",
+   "dur": 1.616,
+   "src": "779d17375ff2"
+  },
+  {
+   "id": null,
+   "text": "Entry burn complete",
+   "key": "entry burn complete",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_entry_burn_complete_8eeb0f.mp3",
+   "dur": 1.6,
+   "src": "2b598dcc42e4"
+  },
+  {
+   "id": null,
+   "text": "Stage 1 is transonic",
+   "key": "stage 1 is transonic",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_stage_1_is_transonic_ed0f19.mp3",
+   "dur": 1.829,
+   "src": "8337ac427cc5"
+  },
+  {
+   "id": null,
+   "text": "Standing by for landing",
+   "key": "standing by for landing",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_standing_by_for_landing_459b5f.mp3",
+   "dur": 1.429,
+   "src": "669c7505462f"
+  },
+  {
+   "id": null,
+   "text": "Legs deployed",
+   "key": "legs deployed",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_legs_deployed_f98147.mp3",
+   "dur": 1.273,
+   "src": "7f3a99c4bf79"
+  },
+  {
+   "id": null,
+   "text": "And the Falcon has landed",
+   "key": "and the falcon has landed",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_and_the_falcon_has_landed_b90068.mp3",
+   "dur": 1.468,
+   "src": "1a1a9ac5fd5f"
+  },
+  {
+   "id": null,
+   "text": "The Falcon has landed on Of Course I Still Love You",
+   "key": "the falcon has landed on of course i still love you",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_the_falcon_has_landed_on_of_course_i_still_love__24d1aa.mp3",
+   "dur": 2.722,
+   "src": "5648f286dfa2"
+  },
+  {
+   "id": null,
+   "text": "Stage 1 landing confirmed",
+   "key": "stage 1 landing confirmed",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_stage_1_landing_confirmed_af5873.mp3",
+   "dur": 2.033,
+   "src": "ab8bb2c31790"
+  },
+  {
+   "id": null,
+   "text": "SECO 1",
+   "key": "seco 1",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_seco_1_9a8a19.mp3",
+   "dur": 1.042,
+   "src": "0f1449d825c5"
+  },
+  {
+   "id": null,
+   "text": "Second stage engine cutoff",
+   "key": "second stage engine cutoff",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_second_stage_engine_cutoff_74f512.mp3",
+   "dur": 2.036,
+   "src": "27e9a1f4bce5"
+  },
+  {
+   "id": null,
+   "text": "SECO confirmed",
+   "key": "seco confirmed",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_seco_confirmed_935c84.mp3",
+   "dur": 1.146,
+   "src": "6c4032641802"
+  },
+  {
+   "id": null,
+   "text": "Nominal orbit insertion",
+   "key": "nominal orbit insertion",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_nominal_orbit_insertion_2bb2fc.mp3",
+   "dur": 1.778,
+   "src": "7776942f9a49"
+  },
+  {
+   "id": null,
+   "text": "Orbit insertion confirmed",
+   "key": "orbit insertion confirmed",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_orbit_insertion_confirmed_7b6783.mp3",
+   "dur": 1.815,
+   "src": "17e0e18f08dd"
+  },
+  {
+   "id": null,
+   "text": "Deployment confirmed",
+   "key": "deployment confirmed",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_deployment_confirmed_3c4a1a.mp3",
+   "dur": 1.468,
+   "src": "64f515c1fe1e"
+  },
+  {
+   "id": null,
+   "text": "Deployment confirmed",
+   "key": "deployment confirmed",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_deployment_confirmed_a5a537.mp3",
+   "dur": 1.298,
+   "src": "4bf2645d4444"
+  },
+  {
+   "id": null,
+   "text": "Starlink satellites have been deployed",
+   "key": "starlink satellites have been deployed",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_starlink_satellites_have_been_deployed_4d6d53.mp3",
+   "dur": 2.089,
+   "src": "16d78d9c9c4c"
+  },
+  {
+   "id": null,
+   "text": "Payload deploy confirmed",
+   "key": "payload deploy confirmed",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_payload_deploy_confirmed_128e5d.mp3",
+   "dur": 1.718,
+   "src": "f0c8d61348ea"
+  },
+  {
+   "id": null,
+   "text": "Countdown hold",
+   "key": "countdown hold",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_countdown_hold_c76333.mp3",
+   "dur": 1.325,
+   "src": "3bc0727f8070"
+  },
+  {
+   "id": null,
+   "text": "We are holding",
+   "key": "we are holding",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_we_are_holding_c28536.mp3",
+   "dur": 1.155,
+   "src": "e7990057a1eb"
+  },
+  {
+   "id": null,
+   "text": "Countdown resumed",
+   "key": "countdown resumed",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_countdown_resumed_050edd.mp3",
+   "dur": 1.452,
+   "src": "8dabb3418bce"
+  },
+  {
+   "id": null,
+   "text": "Manual stage separation",
+   "key": "manual stage separation",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_manual_stage_separation_2ad892.mp3",
+   "dur": 1.875,
+   "src": "be5e0addc260"
+  },
+  {
+   "id": null,
+   "text": "Manual fairing separation",
+   "key": "manual fairing separation",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_manual_fairing_separation_97a23d.mp3",
+   "dur": 1.892,
+   "src": "7324e59cdc24"
+  },
+  {
+   "id": null,
+   "text": "Early stage separation",
+   "key": "early stage separation",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_early_stage_separation_fde568.mp3",
+   "dur": 1.719,
+   "src": "b99a2256b05c"
+  },
+  {
+   "id": null,
+   "text": "Stage 1 propellant depleted",
+   "key": "stage 1 propellant depleted",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_stage_1_propellant_depleted_35ea22.mp3",
+   "dur": 2.142,
+   "src": "ec60e58cd7d4"
+  },
+  {
+   "id": null,
+   "text": "Stage 1 engine flameout",
+   "key": "stage 1 engine flameout",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_stage_1_engine_flameout_03d572.mp3",
+   "dur": 1.979,
+   "src": "76281a3b27b4"
+  },
+  {
+   "id": null,
+   "text": "Stage 2 engine flameout",
+   "key": "stage 2 engine flameout",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_stage_2_engine_flameout_9ac465.mp3",
+   "dur": 1.893,
+   "src": "01c06677191d"
+  },
+  {
+   "id": null,
+   "text": "Loss of signal",
+   "key": "loss of signal",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_loss_of_signal_d242c6.mp3",
+   "dur": 1.221,
+   "src": "f02b4b5a4681"
+  },
+  {
+   "id": null,
+   "text": "We have lost telemetry from the first stage",
+   "key": "we have lost telemetry from the first stage",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_we_have_lost_telemetry_from_the_first_stage_88a0f8.mp3",
+   "dur": 2.505,
+   "src": "5263ab3397a4"
+  },
+  {
+   "id": null,
+   "text": "Vehicle anomaly",
+   "key": "vehicle anomaly",
+   "voice": "lc",
+   "kind": "callout",
+   "file": "lc_vehicle_anomaly_dbeebe.mp3",
+   "dur": 1.328,
+   "src": "b3e30e30e970"
+  },
+  {
+   "id": null,
+   "text": "It looks like we had a hard landing",
+   "key": "it looks like we had a hard landing",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_it_looks_like_we_had_a_hard_landing_caa4a8.mp3",
+   "dur": 1.739,
+   "src": "394616c6042e"
+  },
+  {
+   "id": null,
+   "text": "It looks like the booster has tipped over on the deck",
+   "key": "it looks like the booster has tipped over on the deck",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_it_looks_like_the_booster_has_tipped_over_on_the_b9f7f2.mp3",
+   "dur": 2.345,
+   "src": "98dc2eccf6f9"
+  },
+  {
+   "id": null,
+   "text": "Unfortunately it looks like we did not land the booster",
+   "key": "unfortunately it looks like we did not land the booster",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_unfortunately_it_looks_like_we_did_not_land_the__c5b6f7.mp3",
+   "dur": 3.052,
+   "src": "3373602225b4"
+  },
+  {
+   "id": null,
+   "text": "The booster has splashed down in the ocean",
+   "key": "the booster has splashed down in the ocean",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_the_booster_has_splashed_down_in_the_ocean_2e127d.mp3",
+   "dur": 2.065,
+   "src": "f4632dceb163"
+  },
+  {
+   "id": null,
+   "text": "It looks like we have lost the first stage",
+   "key": "it looks like we have lost the first stage",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_it_looks_like_we_have_lost_the_first_stage_4cb103.mp3",
+   "dur": 1.964,
+   "src": "3e2827889eec"
+  },
+  {
+   "id": null,
+   "text": "The second stage has reached orbit",
+   "key": "the second stage has reached orbit",
+   "voice": "host",
+   "kind": "callout",
+   "file": "host_the_second_stage_has_reached_orbit_419069.mp3",
+   "dur": 2.016,
+   "src": "5705242ed3da"
+  },
+  {
+   "id": null,
+   "text": "Copy",
+   "key": "copy",
+   "voice": "chatter",
+   "kind": "chatter",
+   "file": "chatter_copy_05bab6.mp3",
+   "dur": 0.802,
+   "src": "d14d002bd126"
+  },
+  {
+   "id": null,
+   "text": "Copy all",
+   "key": "copy all",
+   "voice": "chatter",
+   "kind": "chatter",
+   "file": "chatter_copy_all_41d0bb.mp3",
+   "dur": 0.911,
+   "src": "d91b793febc1"
+  },
+  {
+   "id": null,
+   "text": "Stage 2 LOX loading is complete",
+   "key": "stage 2 lox loading is complete",
+   "voice": "chatter",
+   "kind": "chatter",
+   "file": "chatter_stage_2_lox_loading_is_complete_ee3a50.mp3",
+   "dur": 2.494,
+   "src": "d06974fd90b8"
+  },
+  {
+   "id": null,
+   "text": "Stage 1 fuel loading is complete",
+   "key": "stage 1 fuel loading is complete",
+   "voice": "chatter",
+   "kind": "chatter",
+   "file": "chatter_stage_1_fuel_loading_is_complete_b0aa94.mp3",
+   "dur": 2.116,
+   "src": "805364f18faf"
+  },
+  {
+   "id": null,
+   "text": "Range is green",
+   "key": "range is green",
+   "voice": "chatter",
+   "kind": "chatter",
+   "file": "chatter_range_is_green_381965.mp3",
+   "dur": 1.598,
+   "src": "942c0d52e351"
+  },
+  {
+   "id": null,
+   "text": "Weather is go",
+   "key": "weather is go",
+   "voice": "chatter",
+   "kind": "chatter",
+   "file": "chatter_weather_is_go_fb3592.mp3",
+   "dur": 1.131,
+   "src": "4420b5b16ab1"
+  },
+  {
+   "id": null,
+   "text": "Stage 1 engine chill is in progress",
+   "key": "stage 1 engine chill is in progress",
+   "voice": "chatter",
+   "kind": "chatter",
+   "file": "chatter_stage_1_engine_chill_is_in_progress_31945a.mp3",
+   "dur": 2.251,
+   "src": "3ed068ec036b"
+  },
+  {
+   "id": null,
+   "text": "Flight computers are in startup",
+   "key": "flight computers are in startup",
+   "voice": "chatter",
+   "kind": "chatter",
+   "file": "chatter_flight_computers_are_in_startup_dcd50c.mp3",
+   "dur": 1.669,
+   "src": "76d9b249b815"
+  },
+  {
+   "id": null,
+   "text": "Ground side is ready",
+   "key": "ground side is ready",
+   "voice": "chatter",
+   "kind": "chatter",
+   "file": "chatter_ground_side_is_ready_08e976.mp3",
+   "dur": 1.671,
+   "src": "68a33951bd26"
+  },
+  {
+   "id": null,
+   "text": "Navigation is nominal",
+   "key": "navigation is nominal",
+   "voice": "chatter",
+   "kind": "chatter",
+   "file": "chatter_navigation_is_nominal_9ef2f5.mp3",
+   "dur": 1.634,
+   "src": "d87b8d2be10d"
+  },
+  {
+   "id": null,
+   "text": "Helium loading complete",
+   "key": "helium loading complete",
+   "voice": "chatter",
+   "kind": "chatter",
+   "file": "chatter_helium_loading_complete_e07220.mp3",
+   "dur": 1.834,
+   "src": "a8363793efc0"
+  },
+  {
+   "id": null,
+   "text": "Copy, go",
+   "key": "copy go",
+   "voice": "chatter",
+   "kind": "chatter",
+   "file": "chatter_copy_go_9c659b.mp3",
+   "dur": 1.094,
+   "src": "719f67d42e50"
+  },
+  {
+   "id": null,
+   "text": "Stage 2 thrust vector control checks are complete",
+   "key": "stage 2 thrust vector control checks are complete",
+   "voice": "chatter",
+   "kind": "chatter",
+   "file": "chatter_stage_2_thrust_vector_control_checks_are_complet_75305d.mp3",
+   "dur": 2.988,
+   "src": "537004daa979"
+  },
+  {
+   "id": null,
+   "text": "Droneship is ready",
+   "key": "droneship is ready",
+   "voice": "chatter",
+   "kind": "chatter",
+   "file": "chatter_droneship_is_ready_c47bc2.mp3",
+   "dur": 1.234,
+   "src": "34e2b897861d"
+  }
+ ]
+}
