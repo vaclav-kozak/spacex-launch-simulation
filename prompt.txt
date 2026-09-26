@@ -1,0 +1,53 @@
+Build an interactive, cinematic 3D simulation of a Falcon 9 Block 5 Starlink launch from SLC-4E (Vandenberg), with the first stage landing on the droneship "Of Course I Still Love You". Goal: the most realistic and visually impressive result you can produce. It should have accurate physics, timing, VFX and sound, not look like a stylized animation.
+
+## Tech
+- Use any structure and tooling you like (e.g. Vite + three.js, multiple files, build step). It must run locally with one documented command.
+- Blender is available and working. Use it wherever it produces a better result: modeling, texturing, baking, simulations, pre-rendered elements.
+- Use any external assets and libraries that help: models, HDRIs, textures, audio samples, shader and postprocessing libraries. Prefer CC0/permissive licenses and list sources in the README.
+- The scene spans 0–700 km: use floating origin / camera-relative rendering and a logarithmic depth buffer.
+- Run the simulation on a fixed timestep, decoupled from rendering. Target 60 fps on a mid-range laptop, with adaptive quality.
+- The countdown starts on page load. Browsers block autoplay audio, so show a prominent "Click for sound" prompt that unmutes on the first interaction.
+
+## Vehicle & physics
+- Model the vehicle accurately: 9× Merlin 1D octaweb, interstage, 4 titanium grid fins, 4 folding carbon legs, cold-gas N2 RCS, MVac with dark niobium nozzle extension, Starlink fairing. Include an option for a flight-proven (sooty) booster.
+- Use published Block 5 figures (masses, thrust, Isp, throttle range). Simulate thrust, gravity, Mach-dependent drag, a standard atmosphere and Earth curvature. S2 must reach real orbital velocity.
+- The booster landing is closed-loop guidance computed from its actual state and remaining propellant, not a canned animation. User decisions must change outcomes.
+
+## Timeline (automatic, approx. real)
+T-60 s countdown with callouts → T-3 s ignition (TEA-TEB green flash) → T-0 hold-down release → ~T+1:10 Max-Q with throttle bucket → ~T+2:27 MECO → stage sep → S2 ignition → fairing sep (halves descend under parafoils) → booster: RCS flip, grid fins deploy, ballistic coast → ~T+6:20 3-engine entry burn → unpowered, grid-fin-steered fall (fast, visible attitude corrections) → ~T+8:05 single-engine hoverslam, legs deploy in the final seconds → touchdown on OCISLY ~T+8:30 → SECO → payload deploy.
+
+## VFX (highest priority)
+- Plumes change with ambient pressure:
+  - Sea level: tight bright core, Mach diamonds, RP-1 soot, massive steam/smoke at the pad.
+  - Altitude: hugely expanded translucent plume ("jellyfish" at twilight).
+  - Vacuum: near-invisible MVac plume with a red-hot nozzle.
+  - Entry burn: plume ahead of the booster, heating glow on the octaweb.
+  - Landing burn: plume impingement spreading across the deck, sea spray.
+- Physically based sky (Rayleigh/Mie) fading to black with stars. At altitude, show Earth curvature and the atmospheric limb. Ocean with FFT/Gerstner waves, foam and reflections. A volumetric cloud layer the rocket punches through. Condensation near Max-Q.
+- HDR pipeline: AgX/ACES tone mapping, auto-exposure, bloom, heat-haze distortion, subtle motion blur, lens effects and grain. Lighting must be consistent, with the plume lighting the smoke, pad and deck.
+- OCISLY: accurate hull, deck X marking, thrusters, and pitch/roll driven by sea state.
+
+## Audio (Web Audio; synthesized, samples, or both)
+- Countdown and launch-control callouts: go for launch, liftoff, Max-Q, MECO, stage separation, entry burn, landing burn, "The Falcon has landed".
+- Engine roar: layered low rumble plus the characteristic Merlin crackle, with distance attenuation and speed-of-sound delay per active camera. It fades as the air thins, leaving only structure-borne rumble on onboard cams. Add RCS puffs and sonic booms on booster return.
+
+## Cameras
+- Every camera tracks its object. At separation the screen splits automatically into one viewport per interesting object (S2 + payload, booster, optionally fairing halves). Tiling transitions are smooth and each viewport is labeled with live telemetry. Viewports merge back when an object's story ends.
+- Per-viewport modes: chase, onboard (booster looking down at the ship, S2 engine cam), long-lens ground/ship tracking with atmospheric shimmer, free orbit. Clicking a viewport maximizes it.
+- An auto-director frames key moments, e.g. cutting to the deck cam for touchdown.
+
+## UI & controls
+- SpaceX-webcast-style HUD: T± clock, speed and altitude per stage, mission timeline arc with event markers.
+- "Liftoff now" skips the countdown; the countdown can be held and resumed.
+- Manual stage and fairing separation at any time, with simulated consequences. Separating too early leaves the booster short on propellant (hard landing, splashdown or RUD) and/or keeps S2 from reaching orbit.
+- Time warp 1×/2×/4×/8×, plus 30×/100× for coast phases that auto-drops to 1× before key events. Pause and keyboard shortcuts.
+- Extras:
+  - Time of day (morning/twilight/night).
+  - Sea state and wind that affect landing difficulty.
+  - Manual landing mode: the player controls throttle and gimbal during the landing burn.
+  - Instant slow-mo replay of the touchdown.
+  - Photo mode.
+  - End-of-mission summary.
+
+## Process
+Plan the architecture before writing code. If you can execute code, run it in a headless browser and capture screenshots at key moments (pad, Max-Q, staging, entry burn, touchdown, vacuum). Critique them against real launch footage and iterate until they hold up.
