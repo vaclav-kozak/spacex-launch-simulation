@@ -5,7 +5,8 @@ import * as THREE from 'three';
 import type { AppContext, FrameModule, PlumeLight, ViewInfo } from '../../core/context';
 import { LAYER_VFX } from '../../core/context';
 import type { BodyState, EngineState, SimSnapshot } from '../../core/types';
-import { EARTH_RADIUS, IGNITION_TIME, PAD_ELEVATION } from '../../core/constants';
+import { EARTH_MU, EARTH_RADIUS, IGNITION_TIME, PAD_ELEVATION } from '../../core/constants';
+import { densityAt, pressureAt } from '../../sim/atmosphere';
 import { F9 } from '../../core/vehicleSpec';
 import { altitudeW, ambientAt, airDensity, clamp01, loadNoise3D, smooth, sunRadianceAt, vfxShared, windScale } from './common';
 import { ParticleSystem, P_THIN, type ParticleEnv } from './particles';
@@ -44,6 +45,8 @@ export class VFX implements FrameModule {
   private readonly lights: THREE.PointLight[] = [];
   private readonly driveS1 = makeDrive(9);
   private readonly driveS2 = makeDrive(1);
+  /** synthetic S1 drive at MECO (remnant rebuilt after a seek) */
+  private readonly driveRem = makeDrive(9);
   private readonly deck: DeckFrame = { pos: new THREE.Vector3(), up: new THREE.Vector3(), right: new THREE.Vector3(), fwd: new THREE.Vector3(), halfX: 26, halfZ: 45 };
   private readonly penv: ParticleEnv = { t: 0, wind: new THREE.Vector3(), padGroundY: PAD_ELEVATION, deck: null };
   private lastT = NaN;
@@ -52,6 +55,8 @@ export class VFX implements FrameModule {
   private prevOnS1 = new Array(9).fill(false);
   private prevOnS2 = false;
   private localIgn = new Array(10).fill(-Infinity);
+  /** e.on of the previous frame per engine (S1 0..8, S2 9): the local TEA-TEB fallback fires on its rising edge only */
+  private prevEOn = new Array(10).fill(false);
   private firstIgnT = -Infinity;
   private lightCands: LightCand[] = [];
   private readonly exhaustS1 = new THREE.Vector3(0, -1, 0);
@@ -137,6 +142,9 @@ export class VFX implements FrameModule {
     this.updateRemnant(t, S1, q);
 
     // ---------- events by state transition
+    // (particles emitted now are advanced dts before this frame is drawn: back-date body-attached ones)
+    this.ps.quality = q;
+    this.ps.emitLag = dts;
     this.detectEvents(snap, emitQ);
 
     // ---------- emitters (substep for high warp so fast emitters stay spatially smooth)
@@ -145,6 +153,7 @@ export class VFX implements FrameModule {
     const thrust1 = this.thrustFrac(S1);
     const hN = S1.altitude - PAD_ELEVATION;
     for (let i = 0; i < n && h > 0; i++) {
+      this.ps.emitLag = (n - i) * h;
       if (this.particlesEnabled) {
         if (s1Alive && hN < 400 && Math.hypot(S1.pos.x, S1.pos.z) < 600) {
           this.pad.update(h, this.padInput(t, S1, hN, thrust1), this.ps, emitQ);
@@ -159,6 +168,7 @@ export class VFX implements FrameModule {
       }
       this.ps.update(h, this.penv);
     }
+    this.ps.emitLag = 0;
 
     // ---------- condensation collars (stacked flight only)
     if (S2.status === 'stacked' && s1Alive) {
@@ -214,11 +224,14 @@ export class VFX implements FrameModule {
     const grow = 1 + 0.11 * age;
     // (the shell thins as it spreads ~1/grow; a slow fade on top; short fade-in hides the hand-off)
     const dens = smooth(0, 0.6, age) * (1 - smooth(4, REM_LIFE, age));
+    // (the interior fill was the jet itself: with the engines off it empties into the shell within
+    //  ~a second, leaving the sunlit membrane and its streamers -- end-on it no longer reads as fog)
+    const fill = Math.exp(-age / 0.8);
     const L = this.plumeRem.shape.L;
     const probe = _v3.copy(pos).addScaledVector(r.ex, L * 0.45);
     const sun = sunRadianceAt(probe.x, probe.y, probe.z, this.ctx.lighting.sunDir, _c1);
     const amb = ambientAt(altitudeW(probe.x, probe.y, probe.z), this.ctx, _c2);
-    this.plumeRem.setRemnant(pos, grow, dens, L * Math.min(0.5, 0.025 * age), sun, amb, q);
+    this.plumeRem.setRemnant(pos, grow, dens, L * Math.min(0.5, 0.025 * age), sun, amb, q, fill);
   }
 
   private thrustFrac(bs: BodyState): number {
@@ -245,8 +258,11 @@ export class VFX implements FrameModule {
       let I = this.engI(e);
       // TEA-TEB flash: sim ignition time, or our own on-transition fallback
       const li = isS1 ? k : 9;
-      const on = e.on || e.spool > 0.02;
-      if (on && !(isS1 ? this.prevOnS1[k] : this.prevOnS2) && this.localIgn[li] < t - 2) this.localIgn[li] = t;
+      // (rising edge of e.on only: a spool-based test re-fired it while the engines spooled DOWN at
+      //  MECO -- a green flash on all nine, which also kept the dying plume alive)
+      const on = !!e.on;
+      if (on && !this.prevEOn[li] && this.localIgn[li] < t - 2) this.localIgn[li] = t;
+      this.prevEOn[li] = on;
       const ig = Number.isFinite(e.ignitionT) && e.ignitionT <= t && t - e.ignitionT < 5 ? e.ignitionT : this.localIgn[li];
       const dIg = t - ig;
       const g = dIg >= 0 && dIg < 1.5 ? smooth(0, 0.04, dIg) * Math.exp(-dIg / 0.24) : 0;
@@ -344,6 +360,7 @@ export class VFX implements FrameModule {
       const y = F9.s2.mountY + F9.fairing.baseY - 1 - Math.random() * 8;
       _v1.set(Math.cos(a) * (F9.radius + 0.6), y, Math.sin(a) * (F9.radius + 0.6)).applyQuaternion(S1.quat).add(S1.pos); // stacked: S2 frame = S1 frame + mountY
       s.x = _v1.x; s.y = _v1.y; s.z = _v1.z;
+      s.svx = S1.vel.x; s.svy = S1.vel.y; s.svz = S1.vel.z;
       s.vx = S1.vel.x * 0.9; s.vy = S1.vel.y * 0.9; s.vz = S1.vel.z * 0.9;
       s.size0 = 0.8; s.size1 = 3 + 2 * Math.random(); s.sizeTau = 0.4; s.sizeDiff = 0.3;
       s.life = 0.35 + 0.35 * Math.random(); s.tau = 0.7; s.fadeIn = 0.03;
@@ -521,18 +538,63 @@ export class VFX implements FrameModule {
     for (let k = 0; k < 9; k++) {
       const e = b.S1.engines[k];
       this.prevOnS1[k] = !!e && (e.on || e.spool > 0.05);
+      this.prevEOn[k] = !!e && e.on;
     }
+    this.prevEOn[9] = !!b.S2.engines[0]?.on;
     const e2 = b.S2.engines[0];
     this.prevOnS2 = !!e2 && b.S2.status !== 'stacked' && (e2.on || e2.spool > 0.05);
     const ign0 = b.S1.engines[0]?.ignitionT;
     const tIgn = Number.isFinite(ign0) && (ign0 as number) < 0 ? (ign0 as number) : IGNITION_TIME;
     this.firstIgnT = t > tIgn ? tIgn : -Infinity;
     for (let i = 0; i < this.localIgn.length; i++) this.localIgn[i] = -Infinity;
+    this.rebuildRemnant(snap);
     if (!this.particlesEnabled) return;
     const q = EMIT_SCALE[this.ctx.quality.level] ?? 0.85;
     this.ps.gridEnabled = false;
     try { this.prewarm(snap, t, tIgn, q); } finally { this.ps.gridEnabled = true; }
     this.ps.refreshGrid();
+  }
+
+  /**
+   * Seek into MECO..MECO+REM_LIFE: the remnant is normally captured from the live plume at shutdown,
+   * so rebuild it: S1's state at MECO by ballistic back-propagation (it coasts after MECO -- no
+   * boostback), all nine engines at the capture throttle, the MECO altitude's ambient pressure.
+   */
+  private rebuildRemnant(snap: SimSnapshot): void {
+    const meco = snap.timeline.find((m) => m.type === 'MECO' && m.done);
+    const S1 = snap.bodies.S1;
+    if (!meco || S1.status === 'gone' || S1.status === 'destroyed') return;
+    const age = snap.t - meco.t;
+    if (!(age > 0 && age < REM_LIFE)) return;
+    const up = _v1.set(S1.pos.x, S1.pos.y + EARTH_RADIUS, S1.pos.z);
+    const rr = up.length();
+    up.divideScalar(rr);
+    const g = EARTH_MU / (rr * rr);
+    // vel_M = vel - gvec * age, pos_M = pos - vel * age + gvec * age^2 / 2 (gvec = -g up)
+    const d = this.driveRem;
+    const vel = _v2.copy(S1.vel).addScaledVector(up, g * age);
+    const pos = d.origin.copy(S1.pos).addScaledVector(S1.vel, -age).addScaledVector(up, -0.5 * g * age * age);
+    const alt = altitudeW(pos.x, pos.y, pos.z);
+    const vn = _v3.copy(vel).normalize();
+    d.quat.setFromUnitVectors(_v4.set(0, 1, 0), vn);
+    d.active = true;
+    // (the natural capture is the last frame above 5 engine-equivalents: ~5.6 during spool-down)
+    for (let k = 0; k < 9; k++) { d.eng[k] = 5.6 / 9; d.green[k] = 0; }
+    d.ambientPressure = pressureAt(alt);
+    d.ambientDensity = densityAt(alt);
+    d.airVel.copy(vel);
+    d.plane = null;
+    d.flicker = 1;
+    d.sunRad.setRGB(0, 0, 0);
+    d.ambRad.setRGB(0, 0, 0);
+    const q = this.ctx.quality.level;
+    this.plumeRem.setDrive(d, q);
+    const sh = this.plumeRem.shape;
+    if (!this.plumeRem.active || sh.e <= 1.6 || sh.retro >= 0.05) { this.plumeRem.setRemnant(pos, 1, 0, 0, _c1, _c2, q); return; }
+    this.plumeRem.captureFrom(this.plumeRem);
+    const r = this.rem;
+    r.armed = true; r.on = true; r.t0 = meco.t;
+    r.vel.copy(vel); r.pos.copy(pos); r.ex.copy(vn).negate();
   }
 
   private prewarm(snap: SimSnapshot, t: number, tIgn: number, q: number): void {

@@ -240,7 +240,8 @@ export class RcsEmitter {
       }
       _v.applyQuaternion(b.quat).add(b.pos);
       _d.applyQuaternion(b.quat).normalize();
-      this.acc[i] += dt * 55 * q * f;
+      // (vacuum: short-lived streaks -> more of them, so a firing reads as a continuous jet)
+      this.acc[i] += dt * 55 * q * f * (1 + vac);
       if (this.acc[i] < 1 && f > 0.02 && this.acc[i] > 0) this.acc[i] = Math.max(this.acc[i], 1); // first puff immediately
       const s = ps.s;
       while (this.acc[i] >= 1) {
@@ -248,15 +249,16 @@ export class RcsEmitter {
         // cold N2 leaves at ~700 m/s: in thin air each burst is a fast, thin, quickly expanding
         // jet that is gone within half a second (optical depth falls as 1/size^2)
         const sp = (60 + 60 * R()) * (1 + 2.2 * vac);
-        const spread = 0.3 + 0.45 * vac;
+        const spread = 0.3 + 0.12 * vac;
         s.x = _v.x + _d.x * 0.3; s.y = _v.y + _d.y * 0.3; s.z = _v.z + _d.z * 0.3;
+        s.svx = b.vel.x; s.svy = b.vel.y; s.svz = b.vel.z;
         s.vx = b.vel.x + (_d.x + RS() * spread) * sp;
         s.vy = b.vel.y + (_d.y + RS() * spread) * sp;
         s.vz = b.vel.z + (_d.z + RS() * spread) * sp;
-        // (in vacuum: a wide, fast-fading fan rather than a chain of discrete puffs)
-        s.size0 = 0.35; s.size1 = 3 + 40 * vac + 3 * R(); s.sizeTau = 0.45 - 0.15 * vac + 0.3 * R(); s.sizeDiff = 0.5 * (1 - vac);
-        s.life = (1.2 + 1.2 * R()) * (1 - 0.6 * vac); s.tau = 1.8 + 4.7 * (1 - vac); s.fadeIn = 0.02;
-        s.axX = _d.x; s.axY = _d.y; s.axZ = _d.z; s.aspect = 1 + 1.3 * vac;
+        // (in vacuum: a narrow, fast streak gone in ~0.3 s -- sunlit N2 condensate, not a cloud)
+        s.size0 = 0.35; s.size1 = 3 + 22 * vac + 3 * R(); s.sizeTau = 0.45 - 0.2 * vac + 0.3 * R(); s.sizeDiff = 0.5 * (1 - vac);
+        s.life = (1.2 + 1.2 * R()) * (1 - 0.78 * vac); s.tau = 1.8 + 4.7 * (1 - vac) - 0.8 * vac; s.fadeIn = 0.02;
+        s.axX = _d.x; s.axY = _d.y; s.axZ = _d.z; s.aspect = 1 + 2.2 * vac;
         s.drag = 0.25; s.buoy = 0; s.buoyTau = 1;
         s.r = 0.96; s.g = 0.97; s.b = 1.0;
         s.temp = 0; s.emis = 0;
@@ -282,9 +284,11 @@ export class EventPuffs {
       // residual pusher gas / interstage vent: a thin sunlit sheet racing outward, gone in ~1 s
       const sp = (30 + 50 * R()) * (1 + vac);
       s.x = _v.x + _d.x * 1.9; s.y = _v.y + _d.y * 1.9; s.z = _v.z + _d.z * 1.9;
+      s.svx = s1.vel.x; s.svy = s1.vel.y; s.svz = s1.vel.z;
       s.vx = (s1.vel.x + s2.vel.x) * 0.5 + _d.x * sp; s.vy = (s1.vel.y + s2.vel.y) * 0.5 + _d.y * sp; s.vz = (s1.vel.z + s2.vel.z) * 0.5 + _d.z * sp;
-      s.size0 = 0.6; s.size1 = 8 + (22 + 14 * R()) * vac; s.sizeTau = 0.7; s.sizeDiff = 1 - vac;
-      s.life = (2 + 2 * R()) * (1 - 0.6 * vac); s.tau = 2.2; s.fadeIn = 0.02;
+      // (vacuum: expands fast and is optically thin within a few tenths of a second)
+      s.size0 = 0.6; s.size1 = 8 + (22 + 14 * R()) * vac; s.sizeTau = 0.7 - 0.35 * vac; s.sizeDiff = 1 - vac;
+      s.life = (2 + 2 * R()) * (1 - 0.7 * vac); s.tau = 2.2 * (1 - 0.6 * vac); s.fadeIn = 0.02;
       _t.set(-Math.sin(a), 0, Math.cos(a)).applyQuaternion(s1.quat); // tangential: an expanding ring sheet
       s.axX = _t.x; s.axY = _t.y; s.axZ = _t.z; s.aspect = 1 + 2 * vac;
       s.drag = 0.3; s.buoy = 0; s.buoyTau = 1;
@@ -307,6 +311,7 @@ export class EventPuffs {
       _d.set(RS() * 0.3, RS() * 0.2, side).applyQuaternion(s2.quat).normalize();
       const sp = 8 + 20 * R();
       s.x = _v.x; s.y = _v.y; s.z = _v.z;
+      s.svx = s2.vel.x; s.svy = s2.vel.y; s.svz = s2.vel.z;
       s.vx = s2.vel.x + _d.x * sp; s.vy = s2.vel.y + _d.y * sp; s.vz = s2.vel.z + _d.z * sp;
       s.size0 = 0.4; s.size1 = 4 + 5 * R(); s.sizeTau = 0.8; s.sizeDiff = 0.6;
       s.life = 1.5 + 1.5 * R(); s.tau = 2.2; s.fadeIn = 0.02;
@@ -336,16 +341,18 @@ export class EventPuffs {
         const sp = ((start ? 40 : 25) + 40 * R()) * (1 + 5 * thinAir);
         const jit = 10 + 60 * thinAir;
         s.x = _v.x; s.y = _v.y; s.z = _v.z;
+        s.svx = b.vel.x; s.svy = b.vel.y; s.svz = b.vel.z;
         s.vx = b.vel.x * (thinAir) + exhaustDir.x * sp + RS() * jit;
         s.vy = b.vel.y * (thinAir) + exhaustDir.y * sp + RS() * jit;
         s.vz = b.vel.z * (thinAir) + exhaustDir.z * sp + RS() * jit;
         s.size0 = 0.8; s.size1 = 5 + 55 * thinAir + 4 * R(); s.sizeTau = 1.2 - 0.6 * thinAir; s.sizeDiff = 0.8 * (1 - thinAir);
-        s.life = (2.5 + 2 * R()) * (1 - 0.6 * thinAir); s.tau = (start ? 4 : 2.5) * (1 - 0.4 * thinAir); s.fadeIn = 0.03;
+        s.life = (2.5 + 2 * R()) * (1 - 0.7 * thinAir); s.tau = (start ? 4 : 2.5) * (1 - 0.65 * thinAir); s.fadeIn = 0.03;
         s.drag = 0.6 * (1 - thinAir); s.buoy = 1 - thinAir; s.buoyTau = 3;
         s.axX = exhaustDir.x; s.axY = exhaustDir.y; s.axZ = exhaustDir.z; s.aspect = 1 + 3 * thinAir;
+        // (thin air: no afterburning soot -> neutral grey gas, no incandescence)
         const g = 0.3 + 0.5 * thinAir;
-        s.r = g; s.g = g * 0.85; s.b = g * 0.72;
-        s.temp = start ? 1300 : 1600; s.tempTau = 0.4 - 0.2 * thinAir; s.emis = 5;
+        s.r = g; s.g = g * (0.85 + 0.15 * thinAir); s.b = g * (0.72 + 0.28 * thinAir);
+        s.temp = thinAir > 0.5 ? 0 : start ? 1300 : 1600; s.tempTau = 0.4 - 0.2 * thinAir; s.emis = 5;
         s.variant = thinAir > 0.5 ? 4 + ((R() * 4) | 0) : (R() * 4) | 0; s.turb = 1 - thinAir;
         s.flags = thinAir > 0.5 ? P_NOWIND | P_THIN : P_GROUND; s.spin = RS() * 0.5; s.prio = 2;
         s.level = -1;

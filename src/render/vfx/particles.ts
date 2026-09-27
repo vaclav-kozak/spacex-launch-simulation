@@ -43,9 +43,27 @@ export class Spawn {
   spacing = 0;
   /** elongation along a W axis (fast jets / expanding sheets): aspect 1 = round sprite */
   axX = 0; axY = 1; axZ = 0; aspect = 1;
+  /** velocity of the body the puff comes from (m/s); with ParticleSystem.emitLag it back-dates the
+   *  spawn point (reset to 0 after every emit) */
+  svx = 0; svy = 0; svz = 0;
 }
 
 const STRIDE = 24;
+
+/**
+ * Reduced-resolution pass for heavy particle overdraw, per quality level 0..3 (live-tunable as
+ * `__app.vfx.ps.lowTune`). Overdraw = summed screen fraction of the puff quads of one draw (far /
+ * near). Above `on` screens, the draw keeps its nearest puffs up to `full` screens at full resolution;
+ * everything behind them (a contiguous back range: sorting stays exact) is drawn at 1/F resolution
+ * into an offscreen target and composited (depth-aware upsample) before the full-res part.
+ * F = 2, 3 above `f3`, 4 above `f4` screens of low-res overdraw. (q3: off)
+ */
+export const PS_LOWRES = {
+  on: [2, 3, 4, Infinity],
+  full: [0.6, 0.8, 1.2, 4],
+  f3: [4, 6, 8, Infinity],
+  f4: [12, 16, 24, Infinity],
+};
 
 export interface ParticleEnv {
   t: number;
@@ -85,6 +103,27 @@ export class ParticleSystem {
   private instN: THREE.InstancedInterleavedBuffer;
   private dataN: Float32Array;
   private mat: THREE.ShaderMaterial;
+  // reduced-resolution pass (see PS_LOWRES): per draw (0 far, 1 near) a low-res instance buffer,
+  // a mesh in a private scene (nested render into the shared low target) and a composite quad
+  private low: { geo: THREE.InstancedBufferGeometry; inst: THREE.InstancedInterleavedBuffer; data: Float32Array; mesh: THREE.Mesh; comp: THREE.Mesh; count: number; on: boolean; f: number; rect: THREE.Vector4 }[] = [];
+  private matLow: THREE.ShaderMaterial;
+  private compMat: THREE.ShaderMaterial[] = [];
+  private lowScene = new THREE.Scene();
+  /** live-tunable thresholds (shared module object) */
+  readonly lowTune = PS_LOWRES;
+  /** debug/test: disable the reduced-resolution pass */
+  lowResEnabled = true;
+  /** quality level 0..3 (set by VFX every frame) */
+  quality = 2;
+  /** per-camera hysteresis of the reduced-resolution decision (0 far, 1 near) */
+  private lowState = new WeakMap<THREE.Camera, { on: boolean[]; f: number[] }>();
+  /** time (s) the particles emitted next are advanced before the frame is drawn (sub-step lag):
+   *  body-attached puffs are back-dated by `Spawn.sv* x emitLag` so they leave the body where it was */
+  emitLag = 0;
+  /** last view: puffs drawn, overdraw (screens) far / near, low-res puffs / factor (diagnostics) */
+  readonly diag = { n: 0, odFar: 0, odNear: 0, lowFar: 0, lowNear: 0, fFar: 0, fNear: 0 };
+  private ovA: Float32Array;
+  private curFwd: Float32Array;
   private keys: Uint16Array; private order: Uint32Array; private tmpIdx: Uint32Array; private counts = new Uint32Array(4096);
   private relX: Float32Array; private relY: Float32Array; private relZ: Float32Array; private curSize: Float32Array; private curTau: Float32Array; private curT: Float32Array;
   private rr = 0; // round-robin cursor for lighting refresh
@@ -113,7 +152,7 @@ export class ParticleSystem {
     this.axX = f32(); this.axY = f32(); this.axZ = f32(); this.asp = f32();
     this.keys = new Uint16Array(max); this.order = new Uint32Array(max); this.tmpIdx = new Uint32Array(max);
     this.relX = f32(); this.relY = f32(); this.relZ = f32(); this.curSize = f32(); this.curTau = f32(); this.curT = f32();
-    this.curSortD = f32();
+    this.curSortD = f32(); this.ovA = f32(); this.curFwd = f32();
 
     const mk = () => {
       const geo = new THREE.InstancedBufferGeometry();
@@ -139,18 +178,20 @@ export class ParticleSystem {
 
     const plPos = [0, 1, 2, 3].map(() => new THREE.Vector3());
     const plCol = [0, 1, 2, 3].map(() => new THREE.Vector3());
+    const uniforms = {
+      ...aerialUniforms,
+      uSceneDepth: vfxShared.uSceneDepth, uSceneRes: vfxShared.uSceneRes, uHasDepth: vfxShared.uHasDepth,
+      uSunView: vfxShared.uSunView, uUpView: vfxShared.uUpView,
+      uPuffs: { value: puffTex },
+      uAmbCol: { value: new THREE.Color(1, 1, 1) },
+      uGndCol: { value: new THREE.Color(0.1, 0.1, 0.1) },
+      uNoise3D: vfxShared.uNoise3D,
+      uPLPos: { value: plPos }, uPLCol: { value: plCol }, uPLRange: { value: [1, 1, 1, 1] },
+      uTime: vfxShared.uVfxTime,
+      uLowF: { value: 2 },
+    };
     this.mat = new THREE.ShaderMaterial({
-      uniforms: {
-        ...aerialUniforms,
-        uSceneDepth: vfxShared.uSceneDepth, uSceneRes: vfxShared.uSceneRes, uHasDepth: vfxShared.uHasDepth,
-        uSunView: vfxShared.uSunView, uUpView: vfxShared.uUpView,
-        uPuffs: { value: puffTex },
-        uAmbCol: { value: new THREE.Color(1, 1, 1) },
-        uGndCol: { value: new THREE.Color(0.1, 0.1, 0.1) },
-        uNoise3D: vfxShared.uNoise3D,
-        uPLPos: { value: plPos }, uPLCol: { value: plCol }, uPLRange: { value: [1, 1, 1, 1] },
-        uTime: vfxShared.uVfxTime,
-      },
+      uniforms,
       vertexShader: PARTICLE_VS,
       fragmentShader: PARTICLE_FS,
       transparent: true,
@@ -175,6 +216,104 @@ export class ParticleSystem {
     this.meshNear.name = 'vfx-particles-near';
     this.meshNear.onBeforeRender = this.mesh.onBeforeRender;
     this.mesh.add(this.meshNear);
+
+    // ---- reduced-resolution pass: same shader into a cleared RGBA16F target (premultiplied "over"
+    // accumulates colour and coverage exactly), composited as one layer before the full-res puffs
+    this.matLow = new THREE.ShaderMaterial({
+      uniforms,
+      defines: { VFX_LOWRES: 1 },
+      vertexShader: PARTICLE_VS,
+      fragmentShader: PARTICLE_FS,
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+      blending: THREE.CustomBlending,
+      blendSrc: THREE.OneFactor,
+      blendDst: THREE.OneMinusSrcAlphaFactor,
+      blendSrcAlpha: THREE.OneFactor,
+      blendDstAlpha: THREE.OneMinusSrcAlphaFactor,
+    });
+    this.lowScene.matrixWorldAutoUpdate = false;
+    const quad = new THREE.BufferGeometry();
+    quad.setAttribute('position', new THREE.BufferAttribute(new Float32Array([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0]), 3));
+    quad.setIndex([0, 1, 2, 0, 2, 3]);
+    for (let w = 0; w < 2; w++) {
+      const b = mk();
+      const lm = new THREE.Mesh(b.geo, this.matLow);
+      lm.frustumCulled = false;
+      lm.matrixAutoUpdate = false;
+      lm.layers.set(LAYER_VFX);
+      lm.onBeforeRender = (_r, _s, cam) => refreshSharedForDraw(this.ctx, cam, this.matLow, false);
+      this.lowScene.add(lm);
+      const cm = new THREE.ShaderMaterial({
+        uniforms: {
+          uSceneDepth: vfxShared.uSceneDepth, uHasDepth: vfxShared.uHasDepth,
+          uLow: { value: null }, uLowSize: { value: new THREE.Vector2(1, 1) }, uLowTexel: { value: new THREE.Vector2(1, 1) },
+          uLowF: { value: 2 }, uRect: { value: new THREE.Vector4(-1, -1, 1, 1) },
+        },
+        vertexShader: COMP_VS,
+        fragmentShader: COMP_FS,
+        transparent: true,
+        depthWrite: false,
+        depthTest: false,
+        blending: THREE.CustomBlending,
+        blendSrc: THREE.OneFactor,
+        blendDst: THREE.OneMinusSrcAlphaFactor,
+        blendSrcAlpha: THREE.OneFactor,
+        blendDstAlpha: THREE.OneMinusSrcAlphaFactor,
+      });
+      this.compMat.push(cm);
+      const comp = new THREE.Mesh(quad, cm);
+      comp.frustumCulled = false;
+      comp.layers.set(LAYER_VFX);
+      comp.renderOrder = w === 0 ? 9 : 29; // right before the full-res puffs of the same draw
+      comp.name = w === 0 ? 'vfx-particles-low' : 'vfx-particles-near-low';
+      comp.visible = false;
+      comp.onBeforeRender = (r, _s, cam) => this.renderLow(r, cam, w);
+      this.mesh.add(comp);
+      this.low.push({ ...b, mesh: lm, comp, count: 0, on: false, f: 2, rect: new THREE.Vector4(-1, -1, 1, 1) });
+    }
+  }
+
+  /** Nested render of one draw's low-res part into the shared low target (from the composite's onBeforeRender). */
+  private renderLow(r: THREE.WebGLRenderer, cam: THREE.Camera, w: number): void {
+    const L = this.low[w];
+    r.getCurrentViewport(_vp4);
+    const f = L.f;
+    const lw = Math.max(1, Math.ceil(_vp4.z / f)), lh = Math.max(1, Math.ceil(_vp4.w / f));
+    const rt = psLowTarget(lw, lh);
+    rt.viewport.set(0, 0, lw, lh);
+    rt.scissor.set(0, 0, lw, lh);
+    rt.scissorTest = false;
+    for (let k = 0; k < 2; k++) this.low[k].mesh.visible = k === w;
+    L.mesh.matrixWorld.copy(this.mesh.matrixWorld);
+    (this.mat.uniforms.uLowF as { value: number }).value = f;
+    const prevRT = r.getRenderTarget();
+    const prevAC = r.autoClear;
+    r.getClearColor(_cc);
+    const prevCA = r.getClearAlpha();
+    r.setRenderTarget(rt);
+    r.setClearColor(0x000000, 0);
+    // glClear honours the colour write mask, which the last outer draw may have left off
+    // (env.cloudsDepth is colorWrite: false): without this the target keeps stale frames
+    r.state.buffers.color.setMask(true);
+    r.clear(true, false, false);
+    r.autoClear = false;
+    const viewH = vfxShared.uViewH.value;
+    try {
+      r.render(this.lowScene, cam);
+    } finally {
+      vfxShared.uViewH.value = viewH; // (refreshSharedForDraw saw the low viewport)
+      r.autoClear = prevAC;
+      r.setClearColor(_cc, prevCA);
+      r.setRenderTarget(prevRT);
+    }
+    const cu = this.compMat[w].uniforms;
+    cu.uLow.value = rt.texture;
+    (cu.uLowSize.value as THREE.Vector2).set(lw, lh);
+    (cu.uLowTexel.value as THREE.Vector2).set(1 / rt.width, 1 / rt.height);
+    cu.uLowF.value = f;
+    (cu.uRect.value as THREE.Vector4).copy(L.rect);
   }
 
   clear(): void {
@@ -193,14 +332,19 @@ export class ParticleSystem {
         const score = this.prio[j] - this.age[j] / Math.max(this.life[j], 1e-3);
         if (score < bestScore) { bestScore = score; best = j; }
       }
-      if (best < 0 || this.prio[best] > s.prio) { s.aspect = 1; return -1; }
+      if (best < 0 || this.prio[best] > s.prio) { s.aspect = 1; s.svx = s.svy = s.svz = 0; return -1; }
       i = best;
     } else this.count++;
-    this.px[i] = s.x; this.py[i] = s.y; this.pz[i] = s.z;
+    // (back-date body-attached spawns by the sub-step lag: the puff is then advanced emitLag s
+    //  before it is drawn, which would otherwise put it ahead of the vehicle by v x lag)
+    const lag = this.emitLag;
+    const sx = s.x - s.svx * lag, sy = s.y - s.svy * lag, sz = s.z - s.svz * lag;
+    s.svx = 0; s.svy = 0; s.svz = 0;
+    this.px[i] = sx; this.py[i] = sy; this.pz[i] = sz;
     this.vx[i] = s.vx; this.vy[i] = s.vy; this.vz[i] = s.vz;
-    const cy = s.y + EARTH_RADIUS;
-    const il = 1 / Math.sqrt(s.x * s.x + cy * cy + s.z * s.z);
-    this.ux[i] = s.x * il; this.uy[i] = cy * il; this.uz[i] = s.z * il;
+    const cy = sy + EARTH_RADIUS;
+    const il = 1 / Math.sqrt(sx * sx + cy * cy + sz * sz);
+    this.ux[i] = sx * il; this.uy[i] = cy * il; this.uz[i] = sz * il;
     this.age[i] = 0; this.life[i] = s.life;
     this.size0[i] = s.size0; this.size1[i] = s.size1; this.sizeTau[i] = Math.max(s.sizeTau, 1e-3); this.sizeDiff[i] = s.sizeDiff;
     this.tau[i] = s.tau; this.fadeIn[i] = Math.max(s.fadeIn, 1e-3);
@@ -212,7 +356,7 @@ export class ParticleSystem {
     this.prio[i] = s.prio;
     this.lvl[i] = s.level; this.spc[i] = s.spacing;
     this.curSize[i] = s.size0; this.curTau[i] = 0; this.curT[i] = s.temp;
-    sunRadianceAt(s.x, s.y, s.z, this.ctx.lighting.sunDir, this._c);
+    sunRadianceAt(sx, sy, sz, this.ctx.lighting.sunDir, this._c);
     this.sunR[i] = this._c.r; this.sunG[i] = this._c.g; this.sunB[i] = this._c.b;
     this.shadow[i] = 1; this.ambOcc[i] = 1; this.plOcc[i] = 1;
     this.axX[i] = s.axX; this.axY[i] = s.axY; this.axZ[i] = s.axZ; this.asp[i] = s.aspect;
@@ -405,11 +549,13 @@ export class ParticleSystem {
     }
   }
 
-  /** Per-view: cull, sort back-to-front, upload camera-relative instance data. */
+  /** Per-view: cull, sort back-to-front, split far / near / low-res, upload camera-relative instance data. */
   prepareView(camera: THREE.PerspectiveCamera, origin: THREE.Vector3, plumeLights: { pos: THREE.Vector3; color: THREE.Color; range: number }[], splitDist = Infinity): void {
     this.mesh.position.copy(origin); // world position = 0 after the floating-origin shift
     const e = camera.matrixWorld.elements; // camera sits at the origin during render
-    // camera forward (-Z) in world
+    // camera right / up / forward (-Z) in world
+    const rx0 = e[0], ry0 = e[1], rz0 = e[2];
+    const ux0 = e[4], uy0 = e[5], uz0 = e[6];
     const fx = -e[8], fy = -e[9], fz = -e[10];
     const tanY = Math.tan((camera.fov * Math.PI) / 360);
     const tanX = tanY * camera.aspect;
@@ -426,6 +572,9 @@ export class ParticleSystem {
       const d = rx * fx + ry * fy + rz * fz;
       if (d < -s) continue;
       const dist2 = rx * rx + ry * ry + rz * rz;
+      // engulfing the camera: fully faded in the VS (vNear), would only cost full-screen fragments
+      const nf = Math.max(s * 0.35, 2);
+      if (dist2 < nf * nf) continue;
       // coarse frustum test (sphere vs cone)
       const lat2 = dist2 - d * d;
       const lim = Math.max(d, 0) * Math.max(tanX, tanY) * 1.45 + s * 1.5;
@@ -436,6 +585,16 @@ export class ParticleSystem {
       this.tmpIdx[m++] = i;
       this.keys[i] = 0; // filled below
       this.curSortD[i] = dist;
+      // screen coverage of the quad (fraction of the view, clipped to it): overdraw estimate
+      this.curFwd[i] = d;
+      if (d < s * 0.7) this.ovA[i] = 1;
+      else {
+        const ix = 1 / (d * tanX), iy = 1 / (d * tanY);
+        const cx = (rx * rx0 + ry * ry0 + rz * rz0) * ix, cy = (rx * ux0 + ry * uy0 + rz * uz0) * iy;
+        const hx = s * ix, hy = s * iy;
+        const ax = Math.min(1, cx + hx) - Math.max(-1, cx - hx), ay = Math.min(1, cy + hy) - Math.max(-1, cy - hy);
+        this.ovA[i] = ax > 0 && ay > 0 ? ax * ay * 0.25 : 0;
+      }
     }
     // counting sort by log distance, far -> near
     const lmax = Math.log(maxD + 1);
@@ -462,11 +621,69 @@ export class ParticleSystem {
         else break;
       }
     }
+    // reduced resolution: per draw, the back range [k0, kLo) goes to the low-res pass (see PS_LOWRES)
+    let st = this.lowState.get(camera);
+    if (!st) { st = { on: [false, false], f: [2, 2] }; this.lowState.set(camera, st); }
+    const q = Math.max(0, Math.min(3, this.quality | 0));
+    const T = this.lowTune;
+    const kLo = [0, kSplit];
+    const dg = this.diag;
+    dg.n = m;
+    for (let w = 0; w < 2; w++) {
+      const k0 = w ? kSplit : 0, k1 = w ? m : kSplit;
+      let od = 0;
+      for (let k = k0; k < k1; k++) od += this.ovA[this.order[k]];
+      let kb = k0, lowOD = 0, F = 2;
+      if (this.lowResEnabled && od > T.on[q] * (st.on[w] ? 0.75 : 1)) {
+        // keep the nearest puffs up to `full` screens at full resolution
+        let a = 0;
+        kb = k1;
+        while (kb > k0) {
+          const ai = this.ovA[this.order[kb - 1]];
+          if (a + ai > T.full[q]) break;
+          a += ai;
+          kb--;
+        }
+        lowOD = od - a;
+        if (kb - k0 < 2 || lowOD < 1) kb = k0;
+        else {
+          const pf = st.f[w];
+          F = lowOD > T.f4[q] * (pf >= 4 ? 0.8 : 1) ? 4 : lowOD > T.f3[q] * (pf >= 3 ? 0.8 : 1) ? 3 : 2;
+        }
+      }
+      const on = kb > k0;
+      st.on[w] = on;
+      st.f[w] = on ? F : 2;
+      kLo[w] = kb;
+      const L = this.low[w];
+      L.on = on; L.f = F; L.count = kb - k0;
+      L.comp.visible = on;
+      if (w === 0) { dg.odFar = od; dg.lowFar = kb - k0; dg.fFar = on ? F : 0; }
+      else { dg.odNear = od; dg.lowNear = kb - k0; dg.fNear = on ? F : 0; }
+      if (on) {
+        // composite rect: NDC bbox of the low-res puffs (whole view if one straddles the camera)
+        let x0 = 1, y0 = 1, x1 = -1, y1 = -1;
+        for (let k = k0; k < kb; k++) {
+          const i = this.order[k];
+          const d = this.curFwd[i], s = this.curSize[i] * Math.sqrt(Math.max(1, this.asp[i]));
+          if (d < s * 0.7) { x0 = y0 = -1; x1 = y1 = 1; break; }
+          const ix = 1 / (d * tanX), iy = 1 / (d * tanY);
+          const rx = this.relX[i], ry = this.relY[i], rz = this.relZ[i];
+          const cx = (rx * rx0 + ry * ry0 + rz * rz0) * ix, cy = (rx * ux0 + ry * uy0 + rz * uz0) * iy;
+          x0 = Math.min(x0, cx - s * ix); x1 = Math.max(x1, cx + s * ix);
+          y0 = Math.min(y0, cy - s * iy); y1 = Math.max(y1, cy + s * iy);
+        }
+        L.rect.set(Math.max(-1, x0 - 0.02), Math.max(-1, y0 - 0.02), Math.min(1, x1 + 0.02), Math.min(1, y1 + 0.02));
+      }
+    }
+    // upload
     for (let k = 0; k < m; k++) {
       const i = this.order[k];
-      const nearP = k >= kSplit;
-      const D = nearP ? this.dataN : this.data;
-      const o = (nearP ? k - kSplit : k) * STRIDE;
+      const w = k >= kSplit ? 1 : 0;
+      let D: Float32Array, o: number;
+      if (k < kLo[w]) { D = this.low[w].data; o = (k - (w ? kSplit : 0)) * STRIDE; }
+      else if (w) { D = this.dataN; o = (k - kLo[1]) * STRIDE; }
+      else { D = this.data; o = (k - kLo[0]) * STRIDE; }
       D[o] = this.relX[i]; D[o + 1] = this.relY[i]; D[o + 2] = this.relZ[i]; D[o + 3] = this.curSize[i];
       D[o + 4] = this.spin[i] * this.age[i] + this.seed[i] * 6.283;
       D[o + 5] = this.curTau[i];
@@ -483,10 +700,11 @@ export class ParticleSystem {
       D[o + 18] = this.plOcc[i]; D[o + 19] = this.age[i];
       D[o + 20] = this.axX[i]; D[o + 21] = this.axY[i]; D[o + 22] = this.axZ[i]; D[o + 23] = this.asp[i];
     }
-    const mN = m - kSplit;
-    this.geo.instanceCount = kSplit;
+    const mF = kSplit - kLo[0];
+    const mN = m - kLo[1];
+    this.geo.instanceCount = mF;
     this.inst.clearUpdateRanges();
-    this.inst.addUpdateRange(0, Math.max(1, kSplit) * STRIDE);
+    this.inst.addUpdateRange(0, Math.max(1, mF) * STRIDE);
     this.inst.needsUpdate = true;
     this.geoN.instanceCount = mN;
     this.meshNear.visible = mN > 0;
@@ -494,6 +712,14 @@ export class ParticleSystem {
       this.instN.clearUpdateRanges();
       this.instN.addUpdateRange(0, mN * STRIDE);
       this.instN.needsUpdate = true;
+    }
+    for (const L of this.low) {
+      L.geo.instanceCount = L.count;
+      if (L.count > 0) {
+        L.inst.clearUpdateRanges();
+        L.inst.addUpdateRange(0, L.count * STRIDE);
+        L.inst.needsUpdate = true;
+      }
     }
     // plume lights (camera-relative)
     const u = this.mat.uniforms;
@@ -515,10 +741,29 @@ export class ParticleSystem {
     this.geo.dispose();
     this.geoN.dispose();
     this.mat.dispose();
+    this.matLow.dispose();
+    for (const L of this.low) { L.geo.dispose(); L.comp.geometry.dispose(); }
+    for (const c of this.compMat) c.dispose();
   }
 }
 
 const _origin = new THREE.Vector3();
+const _vp4 = new THREE.Vector4();
+const _cc = new THREE.Color();
+
+/** Shared reduced-resolution particle target (grow-only RGBA16F; each view uses its top-left sub-rect). */
+let psLowRT: THREE.WebGLRenderTarget | null = null;
+function psLowTarget(w: number, h: number): THREE.WebGLRenderTarget {
+  if (!psLowRT) {
+    psLowRT = new THREE.WebGLRenderTarget(w, h, {
+      type: THREE.HalfFloatType, format: THREE.RGBAFormat, depthBuffer: false, stencilBuffer: false,
+      minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, generateMipmaps: false,
+    });
+  } else if (psLowRT.width < w || psLowRT.height < h) {
+    psLowRT.setSize(Math.max(psLowRT.width, w), Math.max(psLowRT.height, h));
+  }
+  return psLowRT;
+}
 
 function smooth01(t: number): number {
   t = t < 0 ? 0 : t > 1 ? 1 : t;
@@ -711,6 +956,9 @@ uniform vec3 uSunView;
 uniform vec3 uUpView;
 uniform vec3 uAmbCol;
 uniform vec3 uGndCol;
+#ifdef VFX_LOWRES
+uniform float uLowF;
+#endif
 varying vec2 vUv;
 varying vec4 vCell;
 varying vec3 vViewPos;
@@ -740,7 +988,13 @@ void main() {
   dens = clamp(dens * (1.0 + 0.45 * ero) - 0.18 * (1.0 - dens) * max(ero, 0.0) * 2.0, 0.0, 1.0);
   if (dens < 0.004) discard;
   float viewZ = -vViewPos.z;
+#ifdef VFX_LOWRES
+  // low-res pass: this texel stands for full-res texel F*xy + (F-1)/2 (the composite matches depths to it)
+  int lf = int(uLowF + 0.5);
+  float sceneZ = uHasDepth > 0.5 ? texelFetch(uSceneDepth, ivec2(gl_FragCoord.xy) * lf + (lf - 1) / 2, 0).r : 1e20;
+#else
   float sceneZ = vfxSceneDepth();
+#endif
   float size = vTauTSize.z;
   float soft = clamp((sceneZ - viewZ) / (size * 0.45 + 0.3), 0.0, 1.0);
   if (soft <= 0.0) discard;
@@ -794,5 +1048,67 @@ void main() {
   }
   vec3 col = (lit * alpha + emis) * vAT + vAI * alpha;
   gl_FragColor = vec4(col, alpha);
+}
+`;
+
+// Composite of the reduced-resolution particle layer (premultiplied colour + coverage): a screen-rect
+// quad; bilinear inside, depth-aware (joint-bilateral 2x2) where the scene depth varies (silhouettes).
+const COMP_VS = /* glsl */ `
+uniform vec4 uRect; // NDC x0, y0, x1, y1
+void main() {
+  gl_Position = vec4(mix(uRect.xy, uRect.zw, position.xy), 0.0, 1.0);
+}
+`;
+
+const COMP_FS = /* glsl */ `
+uniform sampler2D uSceneDepth;
+uniform float uHasDepth;
+uniform sampler2D uLow;
+uniform vec2 uLowSize;
+uniform vec2 uLowTexel; // 1 / full size of the (shared, grow-only) low target
+uniform float uLowF;    // full-res pixels per low-res texel
+void main() {
+  vec2 fc = gl_FragCoord.xy;
+  vec2 p = fc / uLowF;
+  vec2 pc = clamp(p, vec2(0.5), uLowSize - 0.5);
+  vec4 c = texture2D(uLow, pc * uLowTexel);
+  if (c.a < 1e-4 && c.r + c.g + c.b < 1e-4) discard;
+  if (uHasDepth < 0.5) { gl_FragColor = c; return; }
+  int lf = int(uLowF + 0.5);
+  ivec2 lo0 = ivec2((lf - 1) / 2);
+  vec2 lc = pc - 0.5;
+  vec2 i0f = floor(lc);
+  vec2 f = lc - i0f;
+  ivec2 i0 = ivec2(i0f);
+  ivec2 mx = ivec2(uLowSize) - 1;
+  float dHi = texelFetch(uSceneDepth, ivec2(fc), 0).r;
+  vec4 wd;
+  vec4 dl;
+  for (int k = 0; k < 4; k++) {
+    ivec2 ii = clamp(i0 + ivec2(k & 1, k >> 1), ivec2(0), mx);
+    float dLo = texelFetch(uSceneDepth, ii * lf + lo0, 0).r;
+    dl[k] = dLo;
+    float rel = abs(dLo - dHi) / max(min(dLo, dHi), 0.1);
+    wd[k] = exp(-rel * 25.0);
+  }
+  if (min(min(wd.x, wd.y), min(wd.z, wd.w)) > 0.6) { gl_FragColor = c; return; }
+  vec4 bw = vec4((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y);
+  vec4 w = bw * wd;
+  float ws = w.x + w.y + w.z + w.w;
+  if (ws < 1e-3) {
+    float dMin = min(min(dl.x, dl.y), min(dl.z, dl.w));
+    // thin occluder in front of everything the low pass saw: the (background) puffs are behind it
+    if (dHi < dMin) discard;
+    // hole through a nearer structure: take the deepest neighbour
+    float dMax = max(max(dl.x, dl.y), max(dl.z, dl.w));
+    w = vec4(equal(dl, vec4(dMax)));
+    ws = w.x + w.y + w.z + w.w;
+  }
+  vec4 acc = vec4(0.0);
+  for (int k = 0; k < 4; k++) {
+    ivec2 ii = clamp(i0 + ivec2(k & 1, k >> 1), ivec2(0), mx);
+    acc += texelFetch(uLow, ii, 0) * w[k];
+  }
+  gl_FragColor = acc / max(ws, 1e-6);
 }
 `;
