@@ -83,7 +83,7 @@ export class App {
     renderer.toneMapping = THREE.NoToneMapping;
     renderer.autoClear = false;
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.type = THREE.PCFShadowMap;
 
     const settings = settingsFromUrl(DEFAULT_SETTINGS, this.params);
     const scene = new THREE.Scene();

@@ -90,13 +90,14 @@ float cldBase(vec3 q, float h, vec2 reg, vec4 w, out float hf) {
   if (inS) {
     // closed-cell organisation: cloud fills the ~2.5 km cells, rifts along the cell walls
     float ss = mix(s, w.g, 0.45);
-    float cov = covS * smoothstep(0.0, 0.12, hs) * (1.0 - smoothstep(0.3, 1.0, hs));
-    d = clamp((ss - (1.0 - cov)) / max(cov, 1e-3), 0.0, 1.0) * sqrt(cov);
+    // lumpy tops via the coverage profile; flat (condensation-level) base via a density ramp only
+    float cov = covS * (1.0 - smoothstep(0.3, 1.0, hs));
+    d = clamp((ss - (1.0 - cov)) / max(cov, 1e-3), 0.0, 1.0) * sqrt(cov) * smoothstep(0.0, 0.1, hs);
     hf = hs;
   }
   if (inC) {
-    float cov = cell * smoothstep(0.0, 0.06, hc) * (1.0 - smoothstep(0.15, 1.0, hc));
-    float dc = clamp((s - (1.0 - cov)) / max(cov, 1e-3), 0.0, 1.0) * sqrt(cov);
+    float cov = cell * (1.0 - smoothstep(0.15, 1.0, hc));
+    float dc = clamp((s - (1.0 - cov)) / max(cov, 1e-3), 0.0, 1.0) * sqrt(cov) * smoothstep(0.0, 0.05, hc);
     if (dc > d) { d = dc; hf = hc; }
   }
   return d;
@@ -155,6 +156,9 @@ uniform float uFrame;
 in vec2 vUv;
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out vec4 outAux;
+// aux distances are stored log-encoded (half-float targets: raw metres overflow at 65504)
+float auxE(float v) { return log2(1.0 + max(v, 0.0)); }
+float auxD(float e) { return exp2(e) - 1.0; }
 
 #define PI 3.14159265
 
@@ -179,7 +183,7 @@ void main() {
       D = min(D, texelFetch(uDepthTex, min(b0 + ivec2(i, j), vmax), 0).r);
     }
   }
-  outAux = vec4(D, 0.0, 0.0, 1.0);
+  outAux = vec4(auxE(D), 0.0, 0.0, 1.0);
   if (uOn < 0.5) return;
 
   vec2 ndc = (hpx * uScale) / uViewPx * 2.0 - 1.0;
@@ -210,7 +214,7 @@ void main() {
   if (tEnd <= t0) return;
 
   float seg = tEnd - t0;
-  outAux.z = t0 + 0.25 * seg;
+  outAux.z = auxE(t0 + 0.25 * seg);
   float pw = mix(1.0, 2.0, smoothstep(3000.0, 30000.0, seg));
   float N = uSteps;
   float jit = fract(ign(gl_FragCoord.xy) + uFrame * 0.618034);
@@ -290,8 +294,8 @@ void main() {
   vec3 ai, at;
   aerialLookup(dir * (tw / a), ai, at);
   outColor = vec4(L * at + ai * a, a);
-  outAux.y = tHalf * cosF;
-  outAux.z = tw / a;
+  outAux.y = tHalf > 0.0 ? auxE(tHalf * cosF) : 0.0;
+  outAux.z = auxE(tw / a);
 }
 `;
 
@@ -305,6 +309,7 @@ uniform vec3 uCamUp;
 uniform vec3 uOrigin;
 uniform vec4 uBox;   // xy = box min (x,z) rel camera, z = size
 uniform vec3 uKeyDir;
+uniform float uShSteps;
 in vec2 vUv;
 layout(location = 0) out vec4 outColor;
 void main() {
@@ -314,16 +319,17 @@ void main() {
   vec3 G = vec3(xzRel.x, sqrt(max(ATM_R * ATM_R - dot(cxz, cxz), 0.0)) - C.y, xzRel.y);
   vec3 up = normalize(C + G);
   float mu = dot(uKeyDir, up);
-  outColor = vec4(0.0, 9000.0, 0.0, 1.0);
+  outColor = vec4(1.0, 9000.0, 0.0, 1.0);
   if (mu < 0.02) return;
   float t0 = shellHit(0.0, mu, CL_BOT).y;
   float t1 = min(shellHit(0.0, mu, CL_TOP).y, t0 + 60000.0);
-  const float N = 16.0;
+  // no per-texel jitter: it turns into a stipple pattern under bilinear filtering
+  float N = uShSteps;
   float dt = (t1 - t0) / N;
-  float jit = ign(gl_FragCoord.xy);
   float tau = 0.0, hB = 9000.0, hT = 0.0;
-  for (int i = 0; i < 16; i++) {
-    float t = t0 + (float(i) + jit) * dt;
+  for (int i = 0; i < 32; i++) {
+    if (float(i) >= N) break;
+    float t = t0 + (float(i) + 0.5) * dt;
     float h = atmAltAt(0.0, mu, t);
     vec2 xz = uOrigin.xz + G.xz + uKeyDir.xz * t;
     float d = cldCoarse(xz, h);
@@ -333,7 +339,8 @@ void main() {
       hT = max(hT, h);
     }
   }
-  outColor = vec4(tau, hB, hT, 1.0);
+  // transmittance (not optical depth) so bilinear filtering gives soft penumbrae instead of stair-steps
+  outColor = vec4(exp(-tau), hB, hT, 1.0);
 }
 `;
 
@@ -394,6 +401,9 @@ uniform float uBlend;
 in vec2 vUv;
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out vec4 outAux;
+// aux distances are stored log-encoded (half-float targets: raw metres overflow at 65504)
+float auxE(float v) { return log2(1.0 + max(v, 0.0)); }
+float auxD(float e) { return exp2(e) - 1.0; }
 void main() {
   ivec2 p = ivec2(gl_FragCoord.xy);
   ivec2 imax = ivec2(uLowSize) - 1;
@@ -402,27 +412,48 @@ void main() {
   outColor = c;
   outAux = x;
   if (uHistOn < 0.5 || x.z <= 0.0) return;
+  // neighbourhood bounds from texels at the same opaque depth (silhouette texels that stopped at a
+  // nearer surface would otherwise let the history fade toward them)
+  float Dc = min(auxD(x.x), 1e7);
   vec4 mn = c, mx = c;
   for (int k = 0; k < 9; k++) {
     if (k == 4) continue;
-    vec4 n = texelFetch(uRaw, clamp(p + ivec2(k % 3 - 1, k / 3 - 1), ivec2(0), imax), 0);
+    ivec2 q = clamp(p + ivec2(k % 3 - 1, k / 3 - 1), ivec2(0), imax);
+    float Dn = min(auxD(texelFetch(uRawAux, q, 0).x), 1e7);
+    if (abs(Dn - Dc) > 0.1 * max(min(Dn, Dc), 1.0)) continue;
+    vec4 n = texelFetch(uRaw, q, 0);
     mn = min(mn, n);
     mx = max(mx, n);
   }
   vec2 ndc = (gl_FragCoord.xy * uScale) / uViewPx * 2.0 - 1.0;
   vec4 v = uInvProj * vec4(ndc, -1.0, 1.0);
   vec3 dir = normalize(uCamRot * normalize(v.xyz / v.w));
-  vec4 cp = uPrevViewProj * vec4(dir * x.z + uCamDelta, 1.0);
+  vec4 cp = uPrevViewProj * vec4(dir * auxD(x.z) + uCamDelta, 1.0);
   if (cp.w <= 0.0) return;
   vec2 uv = cp.xy / cp.w * 0.5 + 0.5;
   if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return;
-  vec2 hp = uv * uViewPx / uScale;
-  vec4 hx = texelFetch(uHistAux, clamp(ivec2(hp), ivec2(0), imax), 0);
-  float Dh = min(hx.x, 1e7), Dc = min(x.x, 1e7);
-  if (abs(Dh - Dc) > 0.1 * max(min(Dh, Dc), 1.0)) return;
-  vec4 h = clamp(texture(uHist, hp / uLowSize), mn, mx);
+  // depth-aware bilinear history fetch: only texels that saw the same opaque depth
+  vec2 hp = uv * uViewPx / uScale - 0.5;
+  vec2 hf = fract(hp);
+  ivec2 h0 = ivec2(floor(hp));
+  vec4 hacc = vec4(0.0);
+  float hw = 0.0, hy = 0.0;
+  for (int k = 0; k < 4; k++) {
+    ivec2 o = ivec2(k & 1, k >> 1);
+    ivec2 q = clamp(h0 + o, ivec2(0), imax);
+    vec4 hx = texelFetch(uHistAux, q, 0);
+    float Dh = min(auxD(hx.x), 1e7);
+    if (abs(Dh - Dc) > 0.1 * max(min(Dh, Dc), 1.0)) continue;
+    float w = (o.x == 0 ? 1.0 - hf.x : hf.x) * (o.y == 0 ? 1.0 - hf.y : hf.y) + 1e-4;
+    hacc += texelFetch(uHist, q, 0) * w;
+    hy += hx.y * w;
+    hw += w;
+  }
+  if (hw <= 0.0) return;
+  vec4 h = clamp(hacc / hw, mn, mx);
   outColor = mix(h, c, uBlend);
-  outAux.y = x.y > 0.0 && hx.y > 0.0 ? mix(hx.y, x.y, 0.3) : x.y;
+  hy /= hw;
+  outAux.y = x.y > 0.0 && hy > 0.0 ? mix(hy, x.y, 0.3) : x.y;
 }
 `;
 
@@ -436,35 +467,75 @@ uniform sampler2D uAux;
 uniform sampler2D uDepthTex;
 uniform vec2 uLowSize;
 uniform float uScale;
+uniform float uMsaaEdge;
 #if defined( USE_LOGARITHMIC_DEPTH_BUFFER )
 uniform float logDepthBufFC;
 #endif
+// aux distances are stored log-encoded (half-float targets: raw metres overflow at 65504)
+float auxE(float v) { return log2(1.0 + max(v, 0.0)); }
+float auxD(float e) { return exp2(e) - 1.0; }
 void main() {
   vec2 fc = gl_FragCoord.xy;
-  float D = min(texelFetch(uDepthTex, ivec2(fc), 0).r, 1e7);
+  ivec2 pc = ivec2(fc);
+  float D0 = min(texelFetch(uDepthTex, pc, 0).r, 1e7);
+  float D = D0;
+  float edgeK = 1.0;
+#ifndef DEPTH_PASS
+  // MSAA (quality 3): a silhouette pixel's resolved colour is part background while its depth is the
+  // nearer surface; composite the background's cloud at ~half coverage so no un-clouded sky rim shows
+  if (uMsaaEdge > 0.5) {
+    ivec2 pm = textureSize(uDepthTex, 0) - 1;
+    float Df = max(
+      max(texelFetch(uDepthTex, min(pc + ivec2(1, 0), pm), 0).r, texelFetch(uDepthTex, max(pc - ivec2(1, 0), ivec2(0)), 0).r),
+      max(texelFetch(uDepthTex, min(pc + ivec2(0, 1), pm), 0).r, texelFetch(uDepthTex, max(pc - ivec2(0, 1), ivec2(0)), 0).r));
+    Df = min(Df, 1e7);
+    if (Df > D0 * 1.5) { D = Df; edgeK = 0.5; }
+  }
+#endif
   vec2 hp = fc / uScale - 0.5;
   vec2 fl = floor(hp);
   vec2 f = hp - fl;
   ivec2 i0 = ivec2(fl);
   ivec2 imax = ivec2(uLowSize) - 1;
   vec4 acc = vec4(0.0);
-  float ws = 0.0, best = -1.0, cd = 0.0;
+  float ws = 0.0, best = -1.0, cd = 0.0, rdMin = 1e9;
   for (int k = 0; k < 4; k++) {
     ivec2 o = ivec2(k & 1, k >> 1);
     ivec2 ij = clamp(i0 + o, ivec2(0), imax);
     vec4 c = texelFetch(uCloud, ij, 0);
     vec2 x = texelFetch(uAux, ij, 0).xy;
     float bw = (o.x == 0 ? 1.0 - f.x : f.x) * (o.y == 0 ? 1.0 - f.y : f.y);
-    float dh = min(x.x, 1e7);
+    float dh = min(auxD(x.x), 1e7);
     float rd = abs(dh - D) / max(min(dh, D), 0.5);
+    rdMin = min(rdMin, rd);
     float w = bw / (1e-3 + rd * rd * 8.0) + 1e-6;
     acc += c * w;
     ws += w;
-    if (w > best) { best = w; cd = x.y; }
+    if (w > best) { best = w; cd = auxD(x.y); }
+  }
+  // no tap at this pixel's depth (silhouettes: the low-res texels took the nearer surface's depth):
+  // widen the search to 4x4 and take the depth-matching texels
+  if (rdMin > 0.1) {
+    vec4 acc2 = vec4(0.0);
+    float ws2 = 0.0, best2 = -1.0, cd2 = 0.0;
+    for (int k = 0; k < 16; k++) {
+      ivec2 o = ivec2(k & 3, k >> 2) - 1;
+      ivec2 ij = clamp(i0 + o, ivec2(0), imax);
+      vec2 x = texelFetch(uAux, ij, 0).xy;
+      float dh = min(auxD(x.x), 1e7);
+      float rd = abs(dh - D) / max(min(dh, D), 0.5);
+      if (rd > 0.1) continue;
+      vec2 dp = vec2(o) - f;
+      float w = 1.0 / (1.0 + dot(dp, dp));
+      acc2 += texelFetch(uCloud, ij, 0) * w;
+      ws2 += w;
+      if (w > best2) { best2 = w; cd2 = auxD(x.y); }
+    }
+    if (ws2 > 0.0) { acc = acc2; ws = ws2; cd = cd2; }
   }
   vec4 c = acc / ws;
 #ifdef DEPTH_PASS
-  if (c.a < 0.6 || cd <= 0.0 || cd >= D) discard;
+  if (c.a < 0.6 || cd <= 0.0 || cd >= D0) discard;
   gl_FragColor = vec4(0.0);
   #if defined( USE_LOGARITHMIC_DEPTH_BUFFER )
     gl_FragDepth = log2(1.0 + cd) * logDepthBufFC * 0.5;
@@ -472,6 +543,7 @@ void main() {
     gl_FragDepth = gl_FragCoord.z;
   #endif
 #else
+  c *= edgeK;
   if (c.a < 1e-4) discard;
   gl_FragColor = c;
 #endif
@@ -606,12 +678,12 @@ export class Clouds {
       uPrevViewProj: { value: new THREE.Matrix4() },
       uCamDelta: { value: new THREE.Vector3() },
       uHistOn: { value: 0 },
-      uBlend: { value: 0.12 },
+      uBlend: { value: 0.07 },
     });
     this.resolve = new FullscreenPass(this.resolveMat);
     const keyDir = { value: new THREE.Vector3(0, 1, 0) };
     const camU = { uCamAlt: shared.uCamAlt, uCamUp: shared.uCamUp, uTransLUT: shared.uTransLUT, uMsLUT: shared.uMsLUT };
-    this.shadowMat = passMaterial(SHADOW_FRAG, { ...camU, ...wu, ...density, uOrigin: origin, uBox: { value: new THREE.Vector4() }, uKeyDir: keyDir });
+    this.shadowMat = passMaterial(SHADOW_FRAG, { ...camU, ...wu, ...density, uOrigin: origin, uBox: { value: new THREE.Vector4() }, uKeyDir: keyDir, uShSteps: { value: 16 } });
     this.shadowPass = new FullscreenPass(this.shadowMat);
     this.probeMat = passMaterial(PROBE_FRAG, {
       ...camU, ...wu, ...density, uOrigin: origin, uKeyDir: keyDir,
@@ -625,6 +697,7 @@ export class Clouds {
       uDepthTex: { value: null as THREE.Texture | null },
       uLowSize: { value: new THREE.Vector2(1, 1) },
       uScale: { value: 2 },
+      uMsaaEdge: { value: 0 },
     };
     this.compMat = new THREE.ShaderMaterial({
       vertexShader: COMP_VERT,
@@ -795,19 +868,20 @@ export class Clouds {
       return;
     }
     const origin = this.ctx.renderOrigin;
-    const n = this.q >= 2 ? 512 : 256;
+    const n = [256, 384, 512, 1024][this.q] ?? 512;
     if (!vs.rt || vs.size !== n) {
       vs.rt?.dispose();
       vs.rt = makeRT(n, n);
       vs.size = n;
     }
-    const half = THREE.MathUtils.clamp(14_000 + 2.5 * camAlt, 14_000, 150_000);
+    const half = THREE.MathUtils.clamp(12_000 + 2.5 * camAlt, 12_000, 150_000);
     const texel = (2 * half) / n;
     const x0 = Math.floor((origin.x - half) / texel) * texel;
     const z0 = Math.floor((origin.z - half) / texel) * texel;
     const su = this.shadowMat.uniforms;
     su.uBox.value.set(x0 - origin.x, z0 - origin.z, 2 * half, 0);
     su.uKeyDir.value.copy(keyDir);
+    su.uShSteps.value = [12, 16, 24, 24][this.q] ?? 16;
     this.shadowPass.render(renderer, vs.rt);
     au.uCloudShadow.value = vs.rt.texture;
     au.uCloudShadowBox.value.set(x0 - origin.x, z0 - origin.z, 1 / (2 * half), 1);
@@ -915,6 +989,8 @@ export class Clouds {
     cu.uDepthTex.value = depth;
     cu.uLowSize.value.set(lw, lh);
     cu.uScale.value = s;
+    // PostPipeline renders quality 3 with 4x MSAA
+    cu.uMsaaEdge.value = this.q >= 3 ? 1 : 0;
   }
 
   /** invalidate temporal history (time-of-day change, seek) */

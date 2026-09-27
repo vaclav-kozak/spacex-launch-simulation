@@ -147,3 +147,13 @@ export function quatFromAxis(axis: Vector3, ref: Vector3, out = new Quaternion()
   const m = new Matrix4().makeBasis(x, y, z);
   return out.setFromRotationMatrix(m);
 }
+
+/**
+ * Speed shown on the webcast-style telemetry (m/s): Earth-relative near the ground (a vehicle
+ * on the pad/deck reads 0) blending to inertial above ~40–120 km (orbital velocity at SECO).
+ */
+export function displaySpeed(b: { speed: number; speedInertial: number; altitude: number }): number {
+  const x = Math.min(1, Math.max(0, (b.altitude - 40_000) / 80_000));
+  const w = x * x * (3 - 2 * x);
+  return b.speed + (b.speedInertial - b.speed) * w;
+}

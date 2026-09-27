@@ -188,6 +188,7 @@ let frames = 0;
 let t0 = performance.now();
 let ms = 16;
 (window as unknown as Record<string, unknown>).__env = env;
+(window as unknown as Record<string, unknown>).__rt = { hdr, linDepth, renderer };
 (window as unknown as Record<string, unknown>).__lum = lumBuf;
 
 async function main() {

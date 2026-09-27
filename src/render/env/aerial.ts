@@ -37,7 +37,7 @@ export const aerialUniforms = {
   // convenience values for custom shaders
   uAerialSunDir: { value: new THREE.Vector3(0, 1, 0) },
   uAerialSunColor: { value: new THREE.Color(1, 1, 1) },
-  // volumetric cloud shadow map (per view, filled by env): x = optical depth from the ground along
+  // volumetric cloud shadow map (per view, filled by env): x = cloud transmittance from the ground along
   // the key light, y/z = lowest/highest cloud altitude met on the way
   uCloudShadow: { value: null as THREE.Texture | null },
   /** xy = box min (W x,z) relative to the camera, z = 1/box size, w = on */
@@ -73,9 +73,9 @@ float aerialCloudShadow(vec3 rel) {
   vec2 uv = (g.xz - uCloudShadowBox.xy) * uCloudShadowBox.z;
   float edge = min(min(uv.x, uv.y), min(1.0 - uv.x, 1.0 - uv.y));
   if (edge <= 0.0) return 1.0;
-  vec3 s = texture(uCloudShadow, uv).xyz;
+  vec3 s = texture(uCloudShadow, uv).xyz; // x = transmittance from the ground, y/z = cloud bottom/top
   float f = clamp((s.z - h) / max(s.z - s.y, 1.0), 0.0, 1.0);
-  return mix(1.0, exp(-s.x * f), smoothstep(0.0, 0.04, edge));
+  return mix(1.0, pow(clamp(s.x, 1e-6, 1.0), f), smoothstep(0.0, 0.04, edge));
 }
 #endif
 `;

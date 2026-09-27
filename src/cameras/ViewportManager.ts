@@ -15,6 +15,7 @@ import { Overlay, type ModeButton } from './overlay';
 import { collapsedRect, HUD_BAND, pipRects, RectTween, ScalarTween, tileRects, type Rect } from './layout';
 import { applyShake, bodyFraming, clamp, fmtInt, isStacked, RAD } from './util';
 import { installFakeSim } from './fakeSim';
+import { displaySpeed } from '../core/frames';
 
 type Role = 'tile' | 'pip';
 
@@ -705,7 +706,7 @@ export class ViewportManager {
       const bottomLimited = view.rect.y + 120 > H - HUD_BAND;
       el.update({
         name: view.label,
-        speed: fmtInt(b.speedInertial * 3.6),
+        speed: fmtInt(displaySpeed(b) * 3.6),
         alt: altKm < 100 ? altKm.toFixed(1) : fmtInt(altKm),
         phase: this.phaseText(v, snap),
         cam: this.camText(v),

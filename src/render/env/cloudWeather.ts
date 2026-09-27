@@ -62,8 +62,10 @@ float cldCover2D(vec2 xz, vec4 w) {
   vec2 reg = cldRegime(xz);
   float sc = clamp(reg.x * (0.55 + 0.9 * w.r), 0.0, 1.0);
   float cu = clamp(reg.y * (0.6 + 0.8 * w.r), 0.0, 1.0);
-  float cells = smoothstep(1.0 - cu, 1.0 - cu + 0.3, w.g);
-  return max(smoothstep(0.2, 0.65, sc), cells * 0.75);
+  float cells = smoothstep(1.0 - cu, 1.0 - cu + 0.3, w.g) * (0.35 + 0.65 * w.a);
+  // deck: closed cells with thinner walls (matches the volumetric deck's cell organisation)
+  float deck = smoothstep(0.2, 0.65, sc) * (0.7 + 0.3 * smoothstep(0.25, 0.7, w.g));
+  return max(deck, cells * 0.8);
 }
 #endif
 `;

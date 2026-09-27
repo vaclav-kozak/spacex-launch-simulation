@@ -7,6 +7,7 @@ import { LAUNCH_AZIMUTH_DEG } from '../core/constants';
 import { padHeadingDir, upAt } from '../core/frames';
 import { F9 } from '../core/vehicleSpec';
 import { Smoother, arcPath, clamp, fmtFixed, fmtInt, h, s, setAttr, setText, toggleClass } from './util';
+import { displaySpeed } from '../core/frames';
 
 const GAUGE_SWEEP = 135; // arc from -135° to +135° (gap at the bottom)
 
@@ -215,7 +216,7 @@ export class StageTelemetry {
     toggleClass(this.el, 'lost', v.lost);
     const b = v.body;
     const ok = !!b && !v.lost;
-    this.speed.update(b ? b.speedInertial * 3.6 : NaN, dt, ok);
+    this.speed.update(b ? displaySpeed(b) * 3.6 : NaN, dt, ok);
     this.alt.update(b ? Math.max(0, b.altitude) / 1000 : NaN, dt, ok);
     this.engines.update(ok ? b : null);
     this.att.update(b, v.silhouette, dt);

@@ -2,7 +2,7 @@
 """Env asset pipeline: downloads public-domain / CC data and bakes the runtime textures.
 
 Usage:  python3 src/render/env/tools/prep_assets.py [--raw DIR] [step ...]
-Steps:  stars milkyway moon earth night clouds mask terrain  (default: all)
+Steps:  stars milkyway moon earth night clouds mask terrain coast  (default: all)
 Raw downloads are cached in --raw (default: .cache/env-raw, not shipped).
 Outputs: public/textures/env/*, public/data/env/*  (sources + licenses in docs/assets/env.md)
 """
@@ -263,11 +263,10 @@ def step_terrain(raw):
         lat, lon = grid_latlon(T, n)
         tx0, tx1, ty0, ty1 = tile_range(lat, lon, T['demZ'])
         dem = mosaic('dem', T['demZ'], tx0, tx1, ty0, ty1, raw)
-        dem = np.where(dem < -3000, np.nan, dem)
-        # fill tile nodata spikes
+        # terrarium nodata (-32768) -> sea (the coast step then cleans the shoreline)
+        dem = np.where(dem < -11000, np.nan, dem)
         if np.isnan(dem).any():
-            m = np.isnan(dem)
-            dem[m] = np.nanmedian(dem)
+            dem[np.isnan(dem)] = -100.0
         h = resample_merc(dem, T['demZ'], tx0, ty0, lat, lon)
         # flatten the pad area (models engineer puts SLC-4E there at PAD_ELEVATION)
         half = T['size'] / 2
@@ -293,6 +292,45 @@ def step_terrain(raw):
         meta[T['name']] = {k: T[k] for k in ('cx', 'cz', 'size', 'hN', 'iN')}
         meta[T['name']]['heightScale'] = 0.1
     meta_update({'terrain': meta, 'region': REG})
+    step_coast(raw)
+
+
+def _grow(mask, allowed, iters=100000):
+    """4-connected flood fill of mask through allowed (numpy only)"""
+    m = mask & allowed
+    for _ in range(iters):
+        g = m.copy()
+        g[1:] |= m[:-1]; g[:-1] |= m[1:]; g[:, 1:] |= m[:, :-1]; g[:, :-1] |= m[:, 1:]
+        g &= allowed
+        if (g == m).all():
+            break
+        m = g
+    return m
+
+
+def step_coast(raw):
+    """Fix the terrarium DEM offshore (flat 0 m tiles, positive interpolation blobs along the coast):
+    water = imagery-classified water connected to the open sea (+ enclosed non-land specks);
+    its height is pushed to <= -4 m so the ocean shader draws it. Idempotent, runs on the outputs."""
+    for T in (T1, T2):
+        n = T['hN']
+        path = os.path.join(DATA, f'{T["name"]}_height.bin')
+        hq = np.fromfile(path, dtype='<i2').reshape(n, n)
+        h = hq.astype(np.float32) * 0.1
+        img = np.asarray(Image.open(os.path.join(TEX, f'{T["name"]}_albedo.jpg'))).astype(np.float32)
+        k = img.shape[0] // n
+        img = img.reshape(n, k, n, k, 3).mean((1, 3))
+        r, g, b = img[..., 0], img[..., 1], img[..., 2]
+        lum = 0.3 * r + 0.55 * g + 0.15 * b
+        cand = ((b - r > 6) & (lum < 120)) | (h < -20) | (h == 0)
+        seed = (h < -20) | (h == 0)
+        water = _grow(seed, cand)
+        land = _grow(h > 30, ~water)
+        water |= ~land  # offshore specks (surf, bogus blobs) not connected to the mainland
+        out = np.where(water, np.minimum(h, -4.0), h)
+        changed = int((out != h).sum())
+        np.clip(np.round(out * 10), -32768, 32767).astype('<i2').tofile(path)
+        print(T['name'], 'coast fix: water px', int(water.sum()), 'changed', changed)
 
 
 def meta_update(d):
@@ -307,7 +345,7 @@ def meta_update(d):
 
 
 STEPS = dict(stars=step_stars, milkyway=step_milkyway, moon=step_moon, earth=step_earth, night=step_night,
-             clouds=step_clouds, mask=step_mask, terrain=step_terrain)
+             clouds=step_clouds, mask=step_mask, terrain=step_terrain, coast=step_coast)
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
