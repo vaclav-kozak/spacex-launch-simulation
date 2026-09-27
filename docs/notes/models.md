@@ -35,6 +35,23 @@
   sampled a single column of a 2D noise roughness map, so roughness varied with height only and the sunlit bell
   showed horizontal rings. The albedo is a bright multiplier (mean ~0.8) with the tone set in `color`, because an
   absolute charcoal map spans only ~6 8-bit levels and its gradients would quantise into bands.
+* **MVac inner glow (round 4):** looking up into the bell now shows engine light: yellow-white at the throat,
+  orange down the regen wall, fading into the extension.
+  * **Runtime mesh.** The GLB regen section (y 2.4 → 3.6 in S2 coordinates) is a single-sided outer skin, so the
+    sky used to show through it. `secondStage.ts` `addRegenInner` adds its inner wall to LOD 0/1: a 13-point
+    lathe, the build_falcon9.py profile minus the 12 mm skin, plus a throat disc. The material is
+    `MVac_RegenInner`: sooty copper, **BackSide** (so it never shows through the outer skin), no shadows.
+  * **Drive.** `SecondStageVisual.gas` = spool^1.3 × (0.35 + 0.65 × throttle). It is 0 before `ignitionT` or
+    while stacked, and it drops with the spool at cutoff.
+    `setMvacTemperature(Thot, gas)` updates three ramps:
+    * outer extension: blackbody wall, unchanged;
+    * `MVac_ExtInner`: the same wall term + `MVAC_GAS.ext`, 1650 K, I 0.45·e^(−v/0.22) from the joint;
+    * `MVac_RegenInner`: `MVAC_GAS.regen` only, T 1750 → 2600 K, I 0.5 → 6 at the throat.
+  * **Units.** The throat is ~6 units, inside the ARCHITECTURE hot-nozzle 4–20 range. It stays small on screen
+    and is only visible down the axis. The outer glow keeps GLOW_PEAK 0.35.
+  * **Visibility.** `onboard_engine` does not see into the bell, so its anchored exposure is unchanged.
+  * **Shots.** `shots/r4c/mv/up_crop_sheet.png` (in-app S2 orbit from behind, night/twilight/morning, T+180),
+    `v_sheet.png` (models viewer), `ob_sheet.png` (engine cam, unchanged).
 * **S1 heating:** grid fins never glow (their tips never reach visible temperatures). Engine bells and the
   octaweb get a dull-red glow only during and just after the entry burn, driven from the burn in
   `VehicleVisuals.ts` (`s1Glow`) and not from dynamic pressure.

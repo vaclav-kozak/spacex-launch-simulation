@@ -79,6 +79,9 @@ export class VehicleVisuals implements FrameModule {
       this.materials.apply(src);
       this.s1 = new BoosterVisual(src, this.rig);
       this.s2 = new SecondStageVisual(src);
+      // runtime MVac inner-wall meshes (addRegenInner): runtime material, no shadow casting
+      this.materials.apply(this.s2.group);
+      this.s2.group.traverse((o) => { if (o.name.endsWith('_regenInner')) o.castShadow = false; });
       const pf = src.getObjectByName('PARAFOIL') ?? null;
       pf?.removeFromParent();
       if (pf) pf.traverse((o) => ((o as THREE.Mesh).isMesh && ((o as THREE.Mesh).castShadow = false)));
@@ -150,7 +153,7 @@ export class VehicleVisuals implements FrameModule {
       this.s1.update(b.S1);
       this.materials.setS1Heating(this.s1Glow(snap));
     }
-    if (this.s2 && b.S2) this.materials.setMvacTemperature(this.s2.update(b.S2, snap));
+    if (this.s2 && b.S2) this.materials.setMvacTemperature(this.s2.update(b.S2, snap), this.s2.gas);
     if (this.fairings.length) {
       this.fairings[0].update(b.FAIRING_A);
       this.fairings[1].update(b.FAIRING_B);

@@ -11,6 +11,7 @@ import { F9, OCISLY, MERLIN_1D, MERLIN_VAC } from '../core/vehicleSpec';
 import {
   RAD, bodyFraming, clamp, isStacked, clampAboveSurface, expK, lerp, lookQuat, noise1, plumeLength,
   plumeBoundary, plumeRadius, type PlumeBoundary, smoothDampScalar, smoothDampVec, smoothstep, travelBasis, type Framing,
+  s1Remnant, type Remnant,
 } from './util';
 
 export interface RigInput {
@@ -345,16 +346,39 @@ export class OnboardRig extends Rig {
 // ---------------------------------------------------------------------------------------------
 // LONG LENS: ground / support-ship telephoto tracking with auto zoom, operator lag, shimmer.
 
-type SiteId = 'near' | 'ground' | 'ship';
-const SITE_LABEL: Record<SiteId, string> = { near: 'PAD PERIMETER', ground: 'VANDENBERG TRACKING', ship: 'SUPPORT SHIP' };
+type SiteId = 'near' | 'ground' | 'ship' | 'coast';
+const SITE_LABEL: Record<SiteId, string> = {
+  near: 'PAD PERIMETER', ground: 'VANDENBERG TRACKING', ship: 'SUPPORT SHIP', coast: 'COAST TRACKING',
+};
 let _siteNear: THREE.Vector3 | null = null;
 let _siteGround: THREE.Vector3 | null = null;
+let _siteCoast: THREE.Vector3 | null = null;
+/** Coastal tracking site for the twilight wide shot (distance from the pad m, heading deg, height m ASL):
+ * ~200 km ESE (Palos Verdes shore, 12 m: a sea horizon, the land further east rendered as a blocky foreground),
+ * off to the side of the 158 deg ground track, so the MECO remnant and the S2 plume separate
+ * across the frame instead of stacking along the line of sight, and low enough in the sky (~20-30 deg) that
+ * the horizon fits under them. It looks WSW over the sea, toward the set sun (az 246 deg): the orange twilight
+ * band sits under the "jellyfish". Dev override: ?twsite=dist,heading,alt */
+const COAST_SITE = { dist: 200_000, hdg: 115, alt: 12 };
+function coastSite(): typeof COAST_SITE {
+  const o = { ...COAST_SITE };
+  if (typeof location === 'undefined') return o;
+  const v = new URLSearchParams(location.search).get('twsite');
+  if (!v) return o;
+  const keys = Object.keys(COAST_SITE) as (keyof typeof COAST_SITE)[];
+  v.split(',').map(Number).forEach((x, i) => { if (Number.isFinite(x) && keys[i]) o[keys[i]] = x; });
+  return o;
+}
 
 export function sitePosition(site: SiteId, snap: SimSnapshot, out: THREE.Vector3): THREE.Vector3 {
   // perimeter camera on the ridge SE of the pad (terrain ~213 m there; the old 1.9 km / 32 deg site
   // sat behind a rise and saw only hillside). Sun behind the operator in the morning.
   if (site === 'near') return out.copy(_siteNear ??= pointAlongAzimuth(900, 150, 233));
   if (site === 'ground') return out.copy(_siteGround ??= pointAlongAzimuth(7800, 62, 330));
+  if (site === 'coast') {
+    const c = coastSite();
+    return out.copy(_siteCoast ??= pointAlongAzimuth(c.dist, c.hdg, c.alt));
+  }
   // support ship: ~3.2 km off OCISLY (east / slightly south), camera 14 m above the water
   const ship = snap.bodies.SHIP.pos;
   const enu = enuAt(ship);
@@ -374,6 +398,13 @@ function siteVisible(site: THREE.Vector3, target: THREE.Vector3): boolean {
   return sinEl > -dip + 0.002;
 }
 
+/** Frame span (m) for S2's MVac far field on the long lens (dev override: ?s2far=span) */
+const S2_FAR = { span: 11000 };
+if (typeof location !== 'undefined') {
+  const v = Number(new URLSearchParams(location.search).get('s2far'));
+  if (v > 0) S2_FAR.span = v;
+}
+
 export class LongLensRig extends Rig {
   readonly mode = 'long_lens' as const;
   site: SiteId = 'ground';
@@ -381,10 +412,11 @@ export class LongLensRig extends Rig {
   private fov = 5;
   private sitePos = new THREE.Vector3();
 
-  describe(): string { return SITE_LABEL[this.site]; }
+  describe(): string { return this.preset === 'twilight' ? `${SITE_LABEL[this.site]} · WIDE` : SITE_LABEL[this.site]; }
 
   private chooseSite(snap: SimSnapshot, focus: BodyId, target: THREE.Vector3): SiteId {
     if (this.preset === 'near' || this.preset === 'ground' || this.preset === 'ship') return this.preset;
+    if (this.preset === 'twilight') return siteVisible(sitePosition('coast', snap, _v1), target) ? 'coast' : 'ground';
     const b = snap.bodies[focus];
     const candidates: SiteId[] = ['near', 'ground', 'ship'];
     let best: SiteId = this.site, bestScore = Infinity;
@@ -405,6 +437,7 @@ export class LongLensRig extends Rig {
   }
 
   update(view: ViewInfo, inp: RigInput): void {
+    if (this.preset === 'twilight') { this.updateWide(view, inp); return; }
     const { snap, focus, dtSim } = inp;
     const b = snap.bodies[focus];
     const fr = bodyFraming(snap, focus, this.fr);
@@ -443,7 +476,12 @@ export class LongLensRig extends Rig {
     const fill = lerp(0.42, 0.24, smoothstep(1, 3.5, plume / Math.max(1, fr.size)));
     // the expanded shell: its width (a cone's cross-section, any view angle) or its projected length
     const shell = pb ? Math.max(wP, (fr.size + aP) * sinA) / 0.65 : 0;
-    const fovT = clamp((2 * Math.atan(Math.max(extent / fill, shell) / 2 / Math.max(1, dist))) / RAD, 0.12, 32);
+    // S2 in vacuum: the MVac condensate far field (vfx: x20 gain over 1.5 km, fading out over 2.5 km, streamers
+    // well outside the shell cone) is what the eye reads from the ground -- frame all of it with sky around it
+    // so it is a jellyfish with the stage at its apex, not a frame full of streamers with a dot in the middle
+    const vacFar = focus === 'S2' && pb && !isStacked(snap) ? smoothstep(0.55, 0.9, (pb.L - 60) / 900) : 0;
+    const far = vacFar * S2_FAR.span * Math.max(0.55, sinA);
+    const fovT = clamp((2 * Math.atan(Math.max(extent / fill, shell, far) / 2 / Math.max(1, dist))) / RAD, 0.12, 32);
     this.fov = this.fresh ? fovT : Math.exp(lerp(Math.log(this.fov), Math.log(fovT), expK(dtSim, 0.9)));
     view.camera.fov = this.fov;
 
@@ -469,7 +507,95 @@ export class LongLensRig extends Rig {
     void b;
     this.fresh = false;
   }
+
+  /**
+   * Twilight "jellyfish" (preset `twilight`): the tracker zoomed out to ~20-40 deg, framing the expanding, sunlit
+   * S1 MECO remnant together with the S2 stage and its MVac plume against the dark sky. Aim and FOV fit the
+   * angular bounding box of both (remnant sphere from `s1Remnant`, S2 + the near field of its plume).
+   */
+  private updateWide(view: ViewInfo, inp: RigInput): void {
+    const { snap, focus, dtSim } = inp;
+    const fr = bodyFraming(snap, focus, this.fr);
+    const blobs = _blobs;
+    let n = 0;
+    if (s1Remnant(snap, inp.evT('MECO'), _rem)) { blobs[n].p.copy(_rem.center); blobs[n++].r = _rem.radius; }
+    const s2 = snap.bodies.S2;
+    if (s2.status !== 'stacked' && s2.status !== 'gone' && s2.status !== 'destroyed') {
+      const f2 = bodyFraming(snap, 'S2', _fr2);
+      const pb = plumeBoundary(snap, 'S2', _pb);
+      const aft = pb ? Math.min(pb.L, 1500) : 0;
+      blobs[n].p.copy(f2.center).addScaledVector(f2.axis, -0.5 * aft);
+      blobs[n++].r = Math.max(500, 0.5 * aft + (pb ? plumeRadius(pb, aft) : 0));
+    }
+    if (n === 0) { blobs[n].p.copy(fr.center); blobs[n++].r = Math.max(fr.size, plumeLength(snap, focus)); }
+
+    const site = this.chooseSite(snap, focus, blobs[0].p);
+    if (site !== this.site) { this.site = site; this.fresh = true; }
+    sitePosition(this.site, snap, this.sitePos);
+    const cam = view.camWorldPos.copy(this.sitePos);
+    const up = upAt(cam, _v5);
+    const aspect = Math.max(0.3, inp.aspect || 16 / 9);
+
+    // 16:9 limits; narrower (split) tiles open up vertically to keep the horizontal coverage
+    const hor = aspect >= 16 / 9 ? 1 : (16 / 9) / aspect;
+    const fovMin = 2 * Math.atan(Math.tan(10 * RAD) * hor) / RAD;
+    const fovMax = Math.min(70, 2 * Math.atan(Math.tan(20 * RAD) * hor) / RAD);
+    const FILL = 0.72;
+    const halfMax = 0.5 * fovMax * RAD;
+    const dip = Math.sqrt((2 * Math.max(2, altitudeOf(cam))) / 6_371_000);
+
+    // angular bounding box of the blobs in the camera basis, recentred a few times. While it still fits the
+    // lens the horizon below them (the orange twilight band under the sun in the WSW) is pinned near the
+    // frame bottom (-0.85) with the subjects' top at most +0.6 -- a sliver of sea, sky and band, subjects
+    // clear of the top edge; otherwise a plain symmetric fit.
+    const dir = _v4.set(0, 0, 0);
+    for (let i = 0; i < n; i++) dir.add(_v1.copy(blobs[i].p).sub(cam).normalize());
+    dir.normalize();
+    let halfV = 0.2;
+    for (let it = 0; it < 4; it++) {
+      const right = _v2.crossVectors(dir, up).normalize();
+      const camUp = _v3.crossVectors(right, dir);
+      let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+      for (let i = 0; i < n; i++) {
+        const d = _v1.copy(blobs[i].p).sub(cam);
+        const a = Math.asin(Math.min(0.95, blobs[i].r / Math.max(1, d.length())));
+        const fz = Math.max(1e-6, d.dot(dir));
+        const ax = Math.atan2(d.dot(right), fz), ay = Math.atan2(d.dot(camUp), fz);
+        x0 = Math.min(x0, ax - a); x1 = Math.max(x1, ax + a);
+        y0 = Math.min(y0, ay - a); y1 = Math.max(y1, ay + a);
+      }
+      // horizon at the aim's azimuth
+      const h = _v1.copy(dir).addScaledVector(up, -dir.dot(up)).normalize().multiplyScalar(Math.cos(dip)).addScaledVector(up, -Math.sin(dip));
+      const yH = Math.atan2(h.dot(camUp), Math.max(1e-6, h.dot(dir)));
+      const hFit = Math.max(0.5 * (y1 - y0), (0.5 * (x1 - x0)) / aspect) / FILL;
+      const hHor = Math.max((y1 - yH) / 1.45, hFit);
+      let cy = 0.5 * (y0 + y1);
+      halfV = hFit;
+      if (hHor <= halfMax) { halfV = hHor; cy = yH + 0.85 * hHor; }
+      const cx = 0.5 * (x0 + x1);
+      dir.multiplyScalar(Math.cos(cx)).addScaledVector(right, Math.sin(cx)).normalize();
+      dir.multiplyScalar(Math.cos(cy)).addScaledVector(camUp, Math.sin(cy)).normalize();
+    }
+    const fovT = clamp((2 * halfV) / RAD, fovMin, fovMax);
+
+    if (this.fresh) this.dir.copy(dir);
+    else this.dir.lerp(dir, expK(dtSim, 0.6)).normalize();
+    this.fov = this.fresh ? fovT : Math.exp(lerp(Math.log(this.fov), Math.log(fovT), expK(dtSim, 1.2)));
+    view.camera.fov = this.fov;
+    lookQuat(this.dir, up, view.camera.quaternion);
+    // tripod-steady wide lens: only a faint operator drift
+    const fr_ = this.fov * RAD;
+    _q2.setFromEuler(_eul.set(noise1(inp.time * 0.17, 11) * fr_ * 0.006, noise1(inp.time * 0.13, 13) * fr_ * 0.008, 0));
+    view.camera.quaternion.multiply(_q2);
+    view.shimmer = 0.04;
+    view.shake = 0;
+    view.onboard = false;
+    this.fresh = false;
+  }
 }
+const _rem: Remnant = { center: new THREE.Vector3(), radius: 0, age: 0 };
+const _blobs = [0, 1, 2].map(() => ({ p: new THREE.Vector3(), r: 0 }));
+const _fr2: Framing = { center: new THREE.Vector3(), size: 1, axis: new THREE.Vector3() };
 // long-lens applies shake itself (fov-scaled): SHAKE_PROFILE.long_lens.amp = 0
 
 // ---------------------------------------------------------------------------------------------
@@ -541,10 +667,12 @@ export class DeckRig extends Rig {
 // PAD: fixed remote cameras around SLC-4E.
 
 type PadPreset = 'wide' | 'tower' | 'engine' | 'up';
-/** "launch mount" camera: on the mount's east walkway grating, ~0.5 m above the deck and ~2.6 m from
- * the booster skin, looking up the side of the vehicle (the old spot under the SE girder corner framed
- * mostly the girder). Aim = point on the vehicle axis at aimY. Dev override: ?padup=heading,dist,h,aimY,fov,aimOff */
-const PAD_UP = { hdg: 100, dist: 4.4, h: 5.3, aimY: 40, fov: 70, aimOff: -1.5 };
+/** low-angle ground tracker ~240 m west of the mount, looking up at the stack (reverse angle to 'wide').
+ * Any camera inside ~150 m ends up in the deluge/apron steam by T+3..5, and from north the TE hides the
+ * stack, so this sits outside the steam and pans/tilts with the climb: aim = axis point at aimY while the
+ * stack is on the mount, then `trk` stack-lengths above the engines (vehicle upper frame, plume below).
+ * Dev override: ?padup=heading,dist,h,aimY,fov,aimOff,trk */
+const PAD_UP = { hdg: 272, dist: 240, h: 1.5, aimY: 34, fov: 34, aimOff: 0, trk: 0.35 };
 function devPadUp(): typeof PAD_UP {
   const o = { ...PAD_UP };
   if (typeof location === 'undefined') return o;
@@ -554,7 +682,7 @@ function devPadUp(): typeof PAD_UP {
   v.split(',').map(Number).forEach((x, i) => { if (Number.isFinite(x) && keys[i]) o[keys[i]] = x; });
   return o;
 }
-const PAD_LABEL: Record<PadPreset, string> = { wide: 'WIDE', tower: 'TOWER', engine: 'ENGINE CAM', up: 'LAUNCH MOUNT' };
+const PAD_LABEL: Record<PadPreset, string> = { wide: 'WIDE', tower: 'TOWER', engine: 'ENGINE CAM', up: 'LOW ANGLE' };
 
 export class PadRig extends Rig {
   readonly mode = 'pad' as const;
@@ -605,11 +733,14 @@ export class PadRig extends Rig {
     } else {
       const c = devPadUp();
       at(c.hdg, c.dist, c.h);
-      if (this.fresh) {
-        const a = (c.hdg + 90) * RAD;   // aimOff: sideways along the tangent (m)
-        this.fixedDir.set(base.x + Math.sin(a) * c.aimOff, base.y + c.aimY, base.z - Math.cos(a) * c.aimOff).sub(view.camWorldPos).normalize();
-      }
-      this.dir.copy(this.fixedDir);
+      const a = (c.hdg + 90) * RAD;   // aimOff: sideways along the tangent (m)
+      const tgt = _v2.set(base.x + Math.sin(a) * c.aimOff, base.y + c.aimY, base.z - Math.cos(a) * c.aimOff);
+      // once the stack climbs past the rest aim, follow a point `trk` stack-lengths above the engines:
+      // vehicle in the upper frame, plume column down into the smoke below it
+      const tr = _v4.copy(s1.pos).addScaledVector(fr.axis, fr.size * c.trk);
+      tgt.lerp(tr, smoothstep(tgt.y - 12, tgt.y + 12, tr.y));
+      const dT = tgt.sub(view.camWorldPos).normalize();
+      if (this.fresh) this.dir.copy(dT); else this.dir.lerp(dT, expK(dtSim, 0.6)).normalize();
       fovT = c.fov;
     }
     this.fov = this.fresh ? fovT : Math.exp(lerp(Math.log(this.fov), Math.log(fovT), expK(dtSim, 0.7)));

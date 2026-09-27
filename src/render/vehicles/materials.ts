@@ -78,6 +78,24 @@ const GLOW_N = 128;
 const GLOW_PEAK = 0.35; // emissive radiance of the hottest band (lighting units; see models.md: 4..20 blows out through AgX)
 const GLOW_GAMMA = 0.8; // camera response: silicon + log encoding compress the Wien slope
 
+/**
+ * Light from the firing engine on the INSIDE of the nozzle, looking up into the bell: the throat window onto
+ * the chamber (~3500 K gas) and the wall around it glow yellow-white, fading to orange down the regen
+ * section and onto the upper extension. Emissive radiance per unit `gas` (engine spool x throttle drive),
+ * blackbody-tinted (camera look: yellow at the throat, orange lower down). Lighting units, ARCHITECTURE
+ * scale: the throat sits in the hot-nozzle 4..20 band; the rest stays near the extension's own glow.
+ */
+export const MVAC_GAS = {
+  /** regen inner wall, v = 0 at the extension joint .. 1 at the throat (and the throat disc) */
+  regen(v: number): { T: number; I: number } {
+    return { T: 1750 + 850 * Math.pow(v, 1.5), I: 0.5 + 5.5 * Math.pow(v, 3) };
+  },
+  /** extension inner wall, v = 0 at the joint .. 1 at the exit: the throat's light, falling off */
+  ext(v: number): { T: number; I: number } {
+    return { T: 1650, I: 0.45 * Math.exp(-v / 0.22) };
+  },
+};
+
 /** Dynamic 1 x 128 HDR emissive ramp for the MVac extension (half float, linear). */
 class MvacGlowRamp {
   readonly tex: THREE.DataTexture;
@@ -85,9 +103,11 @@ class MvacGlowRamp {
   private prof = new Float32Array(GLOW_N);
   private lumRef: number;
   private last = -1;
+  private lastGas = -1;
   private c = new THREE.Color();
-
-  constructor() {
+  private cg = new THREE.Color();
+  /** wall: blackbody extension glow along v; gas: optional engine-light term (see MVAC_GAS) */
+  constructor(private wall = true, private gasK: ((v: number) => { T: number; I: number }) | null = null) {
     const hot = MVAC_T.hot, amb = MVAC_T.amb;
     let mx = 0;
     for (let i = 0; i < GLOW_N; i++) mx = Math.max(mx, MVAC_T.ss((i + 0.5) / GLOW_N));
@@ -103,15 +123,19 @@ class MvacGlowRamp {
     this.set(amb);
   }
 
-  /** hottest-band temperature (K); the rest of the bell follows the steady-state profile shape */
-  set(Thot: number): void {
-    if (Math.abs(Thot - this.last) < 0.5) return;
+  /** hottest-band temperature (K); the rest of the bell follows the steady-state profile shape.
+   *  gas: engine light drive 0..1 (only for ramps built with a gas term) */
+  set(Thot: number, gas = 0): void {
+    if (!this.gasK) gas = 0;
+    if (Math.abs(Thot - this.last) < 0.5 && Math.abs(gas - this.lastGas) < 0.004) return;
     this.last = Thot;
+    this.lastGas = gas;
     const amb = MVAC_T.amb;
     const toH = THREE.DataUtils.toHalfFloat;
     for (let i = 0; i < GLOW_N; i++) {
-      const T = amb + (Thot - amb) * this.prof[i];
+      const T = this.wall ? amb + (Thot - amb) * this.prof[i] : amb;
       let I = 0;
+      this.c.setRGB(0, 0, 0);
       if (T > 700) {
         const L = blackbody(T, this.c) / this.lumRef;
         // fade the last (invisible) few hundred K smoothly to black
@@ -121,10 +145,19 @@ class MvacGlowRamp {
         this.c.g = Math.min(1, this.c.g * 1.55 + 0.012);
         this.c.b = Math.min(1, this.c.b * 1.3 + 0.002);
       }
+      let r = this.c.r * I, g = this.c.g * I, b = this.c.b * I;
+      if (gas > 0 && this.gasK) {
+        const k = this.gasK((i + 0.5) / GLOW_N);
+        blackbody(k.T, this.cg);
+        const Ig = k.I * gas;
+        r += this.cg.r * Ig;
+        g += Math.min(1, this.cg.g * 1.15 + 0.01) * Ig;
+        b += Math.min(1, this.cg.b * 1.1) * Ig;
+      }
       const o = i * 4;
-      this.data[o] = toH(this.c.r * I);
-      this.data[o + 1] = toH(this.c.g * I);
-      this.data[o + 2] = toH(this.c.b * I);
+      this.data[o] = toH(r);
+      this.data[o + 1] = toH(g);
+      this.data[o + 2] = toH(b);
       this.data[o + 3] = toH(1);
     }
     this.tex.needsUpdate = true;
@@ -209,6 +242,10 @@ export class VehicleMaterials {
   /** dull orange-red of ~1100-1200 K steel/Inconel seen by a camera (S1 base heating) */
   readonly heatColor = new THREE.Color(1.0, 0.24, 0.045);
   private mvacRamp = new MvacGlowRamp();
+  /** inside of the extension: its own glow + the throat's light near the joint */
+  private mvacRampIn = new MvacGlowRamp(true, MVAC_GAS.ext);
+  /** inside of the regen section + throat disc (v = joint .. throat): engine light only */
+  private mvacRampRegen = new MvacGlowRamp(false, MVAC_GAS.regen);
 
   // texture sets for the soot swap
   private t = {
@@ -288,7 +325,14 @@ export class VehicleMaterials {
     });
     std('MVac_ExtInner', {
       map: extAlb, color: lin(0x161616).multiplyScalar(1.25), roughness: 0.85, metalness: 0.3, roughnessMap: extRough,
-      emissive: new THREE.Color(1, 1, 1), emissiveIntensity: 0, emissiveMap: this.mvacRamp.tex,
+      emissive: new THREE.Color(1, 1, 1), emissiveIntensity: 0, emissiveMap: this.mvacRampIn.tex,
+    });
+    // inside of the regen section and the throat disc (runtime geometry, secondStage.ts addRegenInner):
+    // sooty copper, lit by the engine; drawn BackSide so its outward-facing lathe never shows through the
+    // outer regen skin 12 mm away
+    std('MVac_RegenInner', {
+      color: lin(0x2a1d14), roughness: 0.75, metalness: 0.4, side: THREE.BackSide,
+      emissive: new THREE.Color(1, 1, 1), emissiveIntensity: 0, emissiveMap: this.mvacRampRegen.tex,
     });
     std('MVac_Regen', { color: lin(0x6b4a33), roughness: 0.38, metalness: 1.0, roughnessMap: rough2 });
     std('MVac_Parts', { color: lin(0x505050), roughness: 0.45, metalness: 0.85 });
@@ -387,17 +431,21 @@ export class VehicleMaterials {
     this.m['Fairing'].emissiveIntensity = 0.12 * Math.max(0, Math.min(1, g)) ** 2;
   }
 
-  /** MVac nozzle-extension glow from the temperature (K) of its hottest band. */
-  setMvacTemperature(Thot: number): void {
+  /** MVac glow: extension hottest-band temperature (K) and the engine-light drive `gas` (0..1, spool x
+   *  throttle; lights the inside of the bell: throat, regen wall, upper extension). */
+  setMvacTemperature(Thot: number, gas = 0): void {
     this.mvacRamp.set(Thot);
+    this.mvacRampIn.set(Thot, gas);
+    this.mvacRampRegen.set(Thot, gas);
     const on = Thot > 700 ? 1 : 0;
     this.m['MVac_Ext'].emissiveIntensity = on;
-    this.m['MVac_ExtInner'].emissiveIntensity = on;
+    this.m['MVac_ExtInner'].emissiveIntensity = on || gas > 0.002 ? 1 : 0;
+    this.m['MVac_RegenInner'].emissiveIntensity = gas > 0.002 ? 1 : 0;
   }
 
-  /** Legacy 0..1 heat fraction (viewer): 0 = cold, 1 = steady-state full thrust. */
+  /** Legacy 0..1 heat fraction (viewer): 0 = cold, 1 = steady-state full thrust (engine firing). */
   setMvacGlow(heat01: number): void {
     const h = Math.max(0, Math.min(1, heat01));
-    this.setMvacTemperature(MVAC_T.amb + (MVAC_T.hot - MVAC_T.amb) * h);
+    this.setMvacTemperature(MVAC_T.amb + (MVAC_T.hot - MVAC_T.amb) * h, h > 0 ? 1 : 0);
   }
 }

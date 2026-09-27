@@ -198,6 +198,39 @@ export function plumeRadius(pb: PlumeBoundary, a: number): number {
   return pb.Rc + pb.tanT * L * (Math.pow((x + pb.a0) / L, pb.p) - Math.pow(pb.a0 / L, pb.p));
 }
 
+/** Lifetime (s after MECO) of vfx's S1 plume remnant (`REM_LIFE` in render/vfx/VFX.ts). */
+export const REMNANT_LIFE = 20;
+/** Where / how big the S1 post-MECO plume remnant ("jellyfish" shell) is. */
+export interface Remnant { center: THREE.Vector3; radius: number; age: number }
+const _rv = new THREE.Vector3();
+const _ru = new THREE.Vector3();
+
+/**
+ * Rough W-frame extent of vfx's post-MECO S1 plume remnant (`VFX.updateRemnant`, restated because cameras only
+ * import core). At MECO vfx keeps a copy of the expanded shell (L ~ 2.3 km x grow); it drifts with 0.35x the
+ * MECO velocity (+ free fall), grows 1 + 0.11 age and fades out over 20 s. The booster coasts ballistically
+ * from the same point, so the shell origin is the booster minus 0.65 x the MECO velocity x age, and the MECO
+ * velocity is today's velocity minus the gravity it picked up since. Seen from ~170 km the lit membrane sits
+ * at the origin and trails ~half a shell length aft (checked against the vfx group projection at T+150..166).
+ * Returns false outside [MECO, MECO + REMNANT_LIFE].
+ */
+export function s1Remnant(snap: SimSnapshot, mecoT: number | undefined, out: Remnant): boolean {
+  if (mecoT === undefined) return false;
+  const age = snap.t - mecoT;
+  if (!(age >= 0 && age <= REMNANT_LIFE)) return false;
+  const s1 = snap.bodies.S1;
+  const vM = _rv.copy(s1.vel).addScaledVector(upAt(s1.pos, _ru), 9.6 * age);
+  const grow = 1 + 0.11 * age;
+  const L = 2300 * grow;
+  out.center.copy(s1.pos).addScaledVector(vM, -0.65 * age);
+  // the exhaust pointed back along the MECO velocity
+  const sp = vM.length();
+  if (sp > 1) out.center.addScaledVector(vM, (-0.25 * L) / sp);
+  out.radius = 0.65 * L;
+  out.age = age;
+  return true;
+}
+
 /** Stable "travel" horizontal direction for chase framing (never degenerate). */
 export function travelBasis(pos: THREE.Vector3, dir: THREE.Vector3, outSide: THREE.Vector3, outUp: THREE.Vector3): void {
   upAt(pos, outUp);

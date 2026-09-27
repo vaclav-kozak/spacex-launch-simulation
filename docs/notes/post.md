@@ -89,6 +89,12 @@ several hundred px wide, and its dark core showed as a hole. Now the ghosts are 
   the chase plume at max-Q, the S2 chase plume (σ ~0.09) and the pad floodlight fields. Compact night
   plumes / engine glows get faint rings. The sun is masked out of the statistics (it has its own analytic ghosts).
 * Gain `GHOST.gain` 1.2e-3 × `flareStrength` × lens profile `flare`. `debug=flare` shows the ghost layer x8.
+* **Round 4: a ghost fades out when it would overlap its source.** Take the source at centroid distance `cl` from
+  the centre. Ghost i then sits `cl·|1−K_i|` away from it. Ghosts fade in (smoothstep) between 0.12 + 2 r and
+  0.32 + 3 r (frame-height units, r = source radius). Otherwise a centred source (the long lens at T+140,
+  `pad:up`) puts the K −0.16/0.38 ghosts right on top of itself. That gave the green dot / rim around the vehicle
+  and the green disc plus pink ring over the pad smoke. Off-centre sources still ghost as before.
+  Shots: `shots/r4c/gh_tw_{136,140,143}.png`, `ghdbg_tw_*` (debug=flare).
 * **The orange crescent near the nose (max-Q chase, twilight/night; `shots/pc3/after/tw_mq.png`,
   `ni_mq.png`) is not a post ghost.** It stays with ghosts off and goes away when the VFX plume PointLights are
   hidden. It is the fairing base annulus (r 1.83–2.6 m, facing aft) lit by the **unshadowed** plume point light

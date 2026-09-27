@@ -27,13 +27,14 @@ click = maximize/restore, left-drag = orbit (switches to orbit from current pose
 * `cam=<BODY>:<mode>[:<preset>]` or `cam=<mode>[:<preset>]` — single fullscreen view, director off for it.
   Bodies: `S1|BOOSTER|STACK|F9`, `S2`, `FAIRING|FA|FB`, `PAYLOAD`, `SHIP|OCISLY|DECK` (SHIP alone → deck).
   Modes: `chase onboard onboard_down onboard_engine long_lens deck pad orbit cinematic`.
-  Presets: pad `wide|tower|engine|up`; long_lens `near|ground|ship`; cinematic `flyby|ship_orbit|dolly`.
+  Presets: pad `wide|tower|engine|up`; long_lens `near|ground|ship|twilight`; cinematic `flyby|ship_orbit|dolly`.
   Examples: `?cam=S1:pad:engine`, `?cam=S1:deck&seek=500`, `?cam=S1:cinematic:ship_orbit`.
 * `split=1` with `cam=` — force the mode on that body but keep the auto split.
 * `director=0` — director off (views stay on chase unless user picks).
 * `labels=0` / `hud=0` — hide viewport labels.
-* DEV: `s2cam=angle,r,y,tilt,roll,fov` overrides the S2 engine-cam mount (S2 body frame). `padup=heading,dist,h,aimY,fov,aimOff`
-  overrides the pad "launch mount" camera.
+* DEV: `s2cam=angle,r,y,tilt,roll,fov` overrides the S2 engine-cam mount (S2 body frame).
+  `padup=heading,dist,h,aimY,fov,aimOff,trk` overrides the pad `up` (LOW ANGLE) camera. `twsite=dist,heading,alt`
+  moves the twilight coast site. `s2far=<m>` sets the S2 long-lens far-field span (default 11000).
 * `camfake=1|splash|rud` — DEV ONLY: replaces `sim.getSnapshot` with a keyframed full mission
   (sep T+150, flip, entry 380–400, landing burn 485, touchdown 510 on OCISLY, SECO 525) for testing
   cameras/tiling without the real sim. `splash`/`rud` = failure variants.
@@ -83,8 +84,28 @@ click = maximize/restore, left-drag = orbit (switches to orbit from current pose
   0.55° (MVac plume streamers around the stage). Without a plume (booster coasting after MECO, T+175) it stays
   on the vehicle (0.12° floor), as before. The near site is on the ridge SE of the pad (900 m / 150°);
   the old site saw only hillside.
-* **Pad "launch mount" (up):** on the mount's east walkway, 100°/4.4 m/h 5.3, looking up the vehicle side
-  (aim 40 m, 1.5 m off-axis) at fov 70. The old spot under the SE girder framed mostly steel.
+* **Pad `up` (round 4, label LOW ANGLE):** a low ground tracker 240 m west of the mount (heading 272°, 1.5 m
+  above the terrace), fov 34. It is the reverse angle to `wide`. It aims at 34 m on the vehicle, then blends to
+  35% up the S1 body once the body passes that height. That rise is ~4.5 m/s², so the blend runs over ~T+3..6.
+  The rotation lerps with a 0.6 s time constant.
+  The old walkway spot (4.4 m from the vehicle, fov 70) was engulfed by the apron steam from T+3, and the vehicle
+  had left the frame by T+4. A camera north of the pad sees the vehicle behind the TE. Anything inside ~150 m is
+  inside the smoke by T+3..5, and the trench exhaust flows to 200°, so the site is to the west.
+  T−2..+6 now reads as the vehicle on the mount, then climbing out of the steam with the tower on the left
+  (`shots/r4c/padup_{mo,tw,ni}_*.png`).
+* **Long lens, S2 in vacuum (round 4):** once the MVac plume has expanded (plumeBoundary `L` past ~60% of full),
+  the fov floor also covers `S2_FAR.span` (11 km) × max(0.55, sin(view angle)). At T+195 the MVac far-field
+  streaks stop filling the frame: the stage and the plume shell read as a shape (~1.5–2°). Morning and night show
+  little: the plume is unlit or sub-pixel, and the director does not use this shot.
+* **Twilight wide (round 4, `long_lens:twilight`):** a coast tracking site 200 km ESE of the pad
+  (`COAST_SITE`: 115°, 12 m ASL, Palos Verdes shore) looks WSW over the sea toward the set sun (az 246°, −6°).
+  The rig fits the angular box of the S1 MECO remnant (`s1Remnant`: 2300 m × grow, centre 0.25 L behind the
+  booster, radius 0.65 L, life 20 s) and S2 plus its near field into 72% of the frame, with fov 20–40° in 16:9.
+  While the fit allows, it pins the horizon near the bottom of the frame (−0.85), so the orange twilight band
+  sits under the jellyfish. Label COAST TRACKING · WIDE.
+  **Director:** in `tod=twilight`, the S1 tile takes this shot from MECO+3 to MECO+17 (`TWILIGHT_WIDE`, ~T+148–162).
+  The S1/S2 split logic is unchanged, and the S2 tile stays on its own shot.
+  Shots: `shots/r4c/dir_tw_{150..166}.png`.
 * **Deck PTZ:** keeps the booster inside ~88% of the half-frame. Recentring starts earlier at wide fov.
 * **Director, booster descent:**
   * AERO: chase for 14 s after ENTRY_BURN_END, then onboard_down to +30 s, then chase.
@@ -109,6 +130,11 @@ click = maximize/restore, left-drag = orbit (switches to orbit from current pose
 * **VFX:** the MVac plume haze is drawn over the lower bell in the engine cam. (Round 2: fixed in vfx.)
 * **VFX (round 3):** done: request 1 (S1 chase inside the plume above ~50 km) and request 2 (`long_lens:ground`
   0.43°/0.12° at T+140..200). See the rig notes above.
+* **VFX (round 4):** `s1Remnant` / `REMNANT_LIFE` in `util.ts` restate the remnant constants in VFX.ts
+  (`REM_LIFE` 20, group drift 0.35·vel·age, ~2200·grow m crescent). Please ping cameras if they change. In the
+  twilight wide shot (fov ~25°) the far-field remnant crescent and the S2 plume proxy have hard white edges.
+* **Env (round 4):** from the 200 km coast site, the land and ocean foreground renders blocky and low-res, and
+  clouds partly hide the twilight band.
 * **Models (round 3):** the new engine-cam angle shows horizontal shading bands on the sunlit MVac extension
   (twilight T+545, `shots/pc3/after/tw_e545.png`).
 

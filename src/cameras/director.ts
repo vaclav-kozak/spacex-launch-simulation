@@ -60,7 +60,7 @@ function stackShot(snap: SimSnapshot, evT: EvT): Shot {
   return chase; // MECO + separation seen from behind
 }
 
-function boosterShot(snap: SimSnapshot, evT: EvT): Shot {
+function boosterShot(snap: SimSnapshot, evT: EvT, opts: DirectorOpts): Shot {
   const t = snap.t;
   const s1 = snap.bodies.S1;
   if (s1.status === 'landed' || s1.status === 'tipped') {
@@ -94,6 +94,12 @@ function boosterShot(snap: SimSnapshot, evT: EvT): Shot {
     default: {
       // COAST / FLIP (and anything unexpected): flip + RCS in chase, then onboard during the coast
       const since = t - (evT('STAGE_SEP') ?? t);
+      // twilight: once the stages are apart, the sunlit MECO remnant ("jellyfish") and the S2 plume over
+      // the orange band, from the coast, until the remnant has faded; then back to the flip
+      const meco = evT('MECO');
+      if (opts.twilight && since >= TWILIGHT_WIDE.after && meco !== undefined && t < meco + TWILIGHT_WIDE.until) {
+        return { mode: 'long_lens', preset: 'twilight' };
+      }
       if (s1.phase === 'FLIP' || since < 50) return chase;
       const eb = evT('ENTRY_BURN_START');
       if (eb !== undefined && eb > t && eb - t < 12) return chase; // see the entry burn light up
@@ -107,7 +113,13 @@ function boosterShot(snap: SimSnapshot, evT: EvT): Shot {
 export interface DirectorOpts {
   /** night preset: the upper stage is in the Earth's shadow, so after SECO the bell is lit only by its own glow */
   night?: boolean;
+  /** twilight preset: the exhaust is sunlit against a dark sky (the S1 tile cuts to the coast wide shot) */
+  twilight?: boolean;
 }
+
+/** Twilight wide shot window: from `after` s past stage sep (the chase has shown the separation) to
+ * MECO + `until` (the vfx remnant fades out over 4..20 s after MECO; cameras/util REMNANT_LIFE). */
+const TWILIGHT_WIDE = { after: 3, until: 17 };
 
 /** Seconds after SECO to stay on the engine cam. At night the bell is lit only by its own glow: the MVac
  * extension cools from ~1480 K to ~1100 K (no longer visible at the onboard exposure) in ~7 s, so cut then,
@@ -144,7 +156,7 @@ function replayShot(snap: SimSnapshot, evT: EvT): Shot {
 export function directorShot(key: StoryKey, snap: SimSnapshot, evT: EvT, opts: DirectorOpts = {}): Shot {
   switch (key) {
     case 'REPLAY': return replayShot(snap, evT);
-    case 'S1': return snap.bodies.S2.status === 'stacked' ? stackShot(snap, evT) : boosterShot(snap, evT);
+    case 'S1': return snap.bodies.S2.status === 'stacked' ? stackShot(snap, evT) : boosterShot(snap, evT, opts);
     case 'S2': return secondStageShot(snap, evT, opts);
     case 'FAIRING': return snap.t - (evT('FAIRING_SEP') ?? snap.t) < 40 ? chase : { mode: 'cinematic', preset: 'dolly' };
   }

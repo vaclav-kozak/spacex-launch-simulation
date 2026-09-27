@@ -233,8 +233,18 @@ vec3 lensGhosts(vec2 p) {
   float RR[5] = float[](1.0, 0.55, 0.7, 0.35, 0.8);    // relative reflectance
   vec3 TT[5] = vec3[](vec3(0.55, 1.0, 0.7), vec3(0.8, 0.6, 1.0), vec3(1.0, 0.8, 0.55), vec3(0.55, 0.75, 1.0), vec3(1.0, 0.95, 0.85));
   vec3 acc = vec3(0.0);
+  float cl = length(c);
   for (int i = 0; i < 5; i++) {
-    float r = srcR * S[i] + 0.002;
+    // defocus floor: even a point source makes a soft disc, not a pin-point dot
+    float r = srcR * S[i] + 0.006;
+    // a ghost lands |c| (1 - K) from its source. Near the optical centre (a tracked vehicle) it sits on / next
+    // to the source, buried in its glare: drawn there it only tints the core or leaves a coloured dot beside it
+    // (green rim at T+140 on the long lens; a green disc + pink ring on the stage above the plume on
+    // pad:up). Fade it in only once it is well clear of the source: a tracked (centred) subject makes none,
+    // an off-centre highlight still does.
+    float sep = cl * abs(1.0 - K[i]);
+    float apart = smoothstep(0.12 + 2.0 * srcR, 0.32 + 3.0 * srcR, sep);
+    if (apart <= 0.0) continue;
     vec2 d = p - c * K[i];
     float dl = length(d);
     if (dl > r * 1.35) continue;
@@ -242,7 +252,7 @@ vec3 lensGhosts(vec2 p) {
     float disc = 1.0 - smoothstep(-r * 0.3, r * 0.08, sd);
     float rim = exp(-(sd * sd) / (r * r * 0.012));
     float shape = disc * FILL[i] + rim * (1.0 - FILL[i]) * 1.8;
-    acc += TT[i] * (shape * RR[i] / (3.14159 * r * r));
+    acc += TT[i] * (shape * RR[i] * apart / (3.14159 * r * r));
   }
   acc *= src * (F * uGhost.x * compact);
   float l = luma(acc);

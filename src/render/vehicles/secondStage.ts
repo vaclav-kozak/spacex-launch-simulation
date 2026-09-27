@@ -31,6 +31,8 @@ export class SecondStageVisual {
   private lod = -2;
   /** hottest-band temperature of the extension (K) */
   temp = MVAC_T.amb;
+  /** engine light inside the bell, 0..1 (spool x throttle; drops within the spool-down at cutoff) */
+  gas = 0;
   /** live cutoff bookkeeping when no SECO marker exists (e.g. flameout / manual shutdown) */
   private offT = NaN;
   private offTemp = MVAC_T.amb;
@@ -44,6 +46,7 @@ export class SecondStageVisual {
       this.group.add(root);
       const mvac = root.getObjectByName(`S2_L${l}_mvac`) ?? null;
       if (mvac) fixExtensionUVs(mvac);
+      if (mvac && l <= 1) addRegenInner(mvac, l);
       this.lods.push({ root, mvac });
     }
     // dispenser stays on S2 after deploy
@@ -85,9 +88,54 @@ export class SecondStageVisual {
   update(b: BodyState, snap: SimSnapshot): number {
     this.temp = this.computeTemp(b, snap);
     const e = b.engines[0];
+    const lit = !!e && b.status !== 'stacked' && Number.isFinite(e.ignitionT) && snap.t >= e.ignitionT;
+    const sp = lit ? Math.max(0, Math.min(1, e!.spool)) : 0;
+    this.gas = sp > 0.01 ? Math.pow(sp, 1.3) * (0.35 + 0.65 * Math.max(0, Math.min(1, e!.throttle > 0 ? e!.throttle : 1))) : 0;
     for (const r of this.lods) if (r.mvac) r.mvac.rotation.set(e?.gimbalX ?? 0, 0, e?.gimbalZ ?? 0, 'ZXY');
     return this.temp;
   }
+}
+
+/**
+ * The GLB's regen section (joint y 2.4 -> throat y 3.6 in S2 coordinates) is a single-sided outer skin, so
+ * looking up into the bell showed the sky through it. Add its inner wall (the build_falcon9.py profile minus
+ * the 12 mm skin) and a throat disc, v = 0 at the joint .. 1 at the throat, for MVac_RegenInner (BackSide).
+ * The mvac node's pivot is at S2 y 3.95; its meshes are in node coordinates.
+ */
+const MVAC_JOINT_Y = 2.4, MVAC_THROAT_Y = 3.6, MVAC_PIVOT_Y = 3.95;
+function addRegenInner(mvac: THREE.Object3D, lod: number): void {
+  const n = 13, pts: THREE.Vector2[] = [];
+  for (let i = 0; i < n; i++) {
+    const t = i / (n - 1);
+    pts.push(new THREE.Vector2(0.14 + 0.5 * Math.pow(1 - t, 0.55), MVAC_JOINT_Y + (MVAC_THROAT_Y - MVAC_JOINT_Y) * t - MVAC_PIVOT_Y));
+  }
+  const seg = lod === 0 ? 64 : 24;
+  const wall = new THREE.LatheGeometry(pts, seg);
+  // throat disc facing up (so from below, i.e. inside the bell, its back face is what BackSide draws)
+  const cap = new THREE.CircleGeometry(0.145, seg).rotateX(-Math.PI / 2).translate(0, MVAC_THROAT_Y - MVAC_PIVOT_Y + 0.004, 0);
+  const uv = cap.getAttribute('uv') as THREE.BufferAttribute;
+  for (let i = 0; i < uv.count; i++) uv.setXY(i, 0.5, 1);
+  const geo = mergeGeometries([wall, cap]);
+  const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ name: 'MVac_RegenInner' }));
+  mesh.name = `${mvac.name}_regenInner`;
+  mesh.castShadow = false;
+  mesh.receiveShadow = false;
+  mvac.add(mesh);
+}
+
+/** minimal indexed/non-indexed merge of position/normal/uv (avoids pulling in BufferGeometryUtils) */
+function mergeGeometries(gs: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  const parts = gs.map((g) => (g.index ? g.toNonIndexed() : g));
+  const out = new THREE.BufferGeometry();
+  for (const name of ['position', 'normal', 'uv']) {
+    const size = parts[0].getAttribute(name).itemSize;
+    const total = parts.reduce((a, g) => a + g.getAttribute(name).count, 0);
+    const arr = new Float32Array(total * size);
+    let o = 0;
+    for (const g of parts) { const a = g.getAttribute(name).array as Float32Array; arr.set(a, o); o += a.length; }
+    out.setAttribute(name, new THREE.BufferAttribute(arr, size));
+  }
+  return out;
 }
 
 /**
