@@ -170,7 +170,11 @@ void main() {
  * (large bright areas, e.g. a frame full of plume-lit smoke). Mostly black frames (space) blend
  * toward an incident-light prior. The target is clamped per camera type, adapted with separate
  * speeds + a slew limit (EV/s), and the key (display value of the metered level) drops for dark
- * scenes so twilight/night read as such instead of being pushed to daylight mid-grey. */
+ * scenes so twilight/night read as such instead of being pushed to daylight mid-grey.
+ * Highlight cap (per camera type, uHiCap): the uHiCap.x percentile may map to at most uHiCap.y exposed
+ * stops. It is a floor on the metered level (solved through the key curve), optionally applied to the
+ * adapted level at once (uHiCap.w: a sudden flood of light, e.g. ignition at a dark pad, stops down in
+ * one frame instead of clipping for half a second). */
 export const ADAPT_FRAG = /* glsl */ `
 ${COMMON}
 uniform sampler2D tHist;
@@ -195,11 +199,29 @@ uniform vec4 uDepthX;
 uniform float uSkyDepth;
 uniform float uAspect;
 uniform float uSubjOverride;
+uniform vec4 uHiCap;  // percentile, max exposed log2 there, weight (0 = off), instant (0..1)
 
 float histBin(int i) {
   float v = 0.0;
   for (int r = 0; r < 8; r++) v += texelFetch(tHist, ivec2(i, r), 0).r;
   return v;
+}
+// display key (log2) for an adapted level Ln: lower in dark scenes, lower still at night
+float keyOf(float Ln) {
+  float k = mix(uKey.x, uKey.y, smoothstep(uKey.z, uKey.w, Ln));
+  return k - uKeyDeep.x * (1.0 - smoothstep(uKeyDeep.z, uKeyDeep.y, Ln)); // y > z; ordered edges
+}
+// lowest metered level at which log2 luminance hl is exposed to at most cap stops:
+// keyOf(L) - L + hl <= cap. keyOf rises well under a stop per stop, so the left side falls with L.
+float capFloor(float hl, float cap) {
+  float lo = uMinLog - 4.0, hi = uMinLog + uLogRange + 4.0;
+  float target = cap - hl;
+  if (keyOf(lo) - lo <= target) return lo;
+  for (int i = 0; i < 20; i++) {
+    float m = 0.5 * (lo + hi);
+    if (keyOf(m) - m > target) lo = m; else hi = m;
+  }
+  return hi;
 }
 void main() {
   float h[64];
@@ -212,10 +234,11 @@ void main() {
     if (lc < uPrior.z) black += v;
   }
   float L;
+  float capL = -1e9; // highlight-cap floor on the metered level (-1e9 = none)
   if (total > 0.0) {
-    float lowW = uP.x * total, highW = uP.y * total, hiW = uP.z * total;
-    float cum = 0.0, sumL = 0.0, sumW = 0.0, hiLog = uMinLog;
-    bool found = false;
+    float lowW = uP.x * total, highW = uP.y * total, hiW = uP.z * total, capW = uHiCap.x * total;
+    float cum = 0.0, sumL = 0.0, sumW = 0.0, hiLog = uMinLog, capLog = uMinLog;
+    bool found = false, capFound = false;
     for (int i = 0; i < 64; i++) {
       float v = h[i];
       float lc = uMinLog + (float(i) + 0.5) / 64.0 * uLogRange;
@@ -224,6 +247,10 @@ void main() {
       if (!found && cum + v >= hiW && v > 0.0) {
         hiLog = uMinLog + (float(i) + clamp((hiW - cum) / v, 0.0, 1.0)) / 64.0 * uLogRange;
         found = true;
+      }
+      if (!capFound && cum + v >= capW && v > 0.0) {
+        capLog = uMinLog + (float(i) + clamp((capW - cum) / v, 0.0, 1.0)) / 64.0 * uLogRange;
+        capFound = true;
       }
       cum += v;
     }
@@ -241,6 +268,11 @@ void main() {
     float blackFrac = black / total;
     float pw = uPrior.y * smoothstep(0.35, 0.85, blackFrac);
     L = mix(L, max(L, uPrior.x), pw);
+    // highlight cap: the brightest few % of the frame may not run more than uHiCap.y stops over white
+    if (uHiCap.z > 0.0 && capFound) {
+      capL = clamp(capFloor(capLog, uHiCap.y), uClamp.x, uClamp.y);
+      L = mix(L, max(L, capL), uHiCap.z);
+    }
   } else {
     L = uClamp.x;
   }
@@ -256,10 +288,11 @@ void main() {
     float step = (L - prev) * (1.0 - exp(-uAdapt.x * rate));
     float maxStep = (L > prev ? uMaxRate.x : uMaxRate.y) * uAdapt.x;
     Ln = prev + clamp(step, -maxStep, maxStep);
+    // instant part of the highlight cap: stop down at once, open up again at the normal rate
+    if (uPrior.w < 0.5 && capL > Ln) Ln += uHiCap.z * uHiCap.w * (capL - Ln);
   }
   // key: display level of the metered luminance, lower in dark scenes (twilight / night look)
-  float keyL = mix(uKey.x, uKey.y, smoothstep(uKey.z, uKey.w, Ln));
-  keyL -= uKeyDeep.x * (1.0 - smoothstep(uKeyDeep.z, uKeyDeep.y, Ln)); // y > z; ordered edges
+  float keyL = keyOf(Ln);
   float exposure = exp2(keyL - Ln + uClamp.w);
 
   // sun: luminance at the disc (half-res bloom mip 0) x fraction of unoccluded depth taps

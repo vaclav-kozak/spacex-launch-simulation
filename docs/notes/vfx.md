@@ -8,6 +8,8 @@ What VFX writes into ctx every `update()`:
 * `ctx.plumeLights` holds up to 4 `{pos (true W), color * intensity, range}`, sorted by intensity. They cover
   the main flame, the pad/deck impact flash, trench-mouth fire, MVac, the TEA-TEB green flash and the landed
   smoulder. Intensity is in "W/sr-like" scene units: irradiance at d is roughly `color / d^2` (sun ~6).
+  The TEA-TEB flash adds `700 * green` to the main flame light (was 3000). That made it a brief green tint
+  on the steel rather than the key light: at 3000 it out-lit the spooling flame about 4:1 for ~0.3 s.
 * Three real `THREE.PointLight`s (decay 2, `distance = sqrt(I/0.004)` capped at 4 km) mirror the top 3
   candidates. They light the vehicle, pad and deck. **Both layers 0 and 1 are enabled** on them.
   Lights that sit below a stacked fairing (S1 main flame / impact flash while S2 is stacked, MVac) also get

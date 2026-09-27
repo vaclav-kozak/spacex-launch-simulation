@@ -412,7 +412,9 @@ export class VFX implements FrameModule {
       if (sh.planeDist < Infinity) dist = Math.min(dist, sh.planeDist * 0.6);
       _v1.copy(d.origin).addScaledVector(ex, dist);
       const I = (1300 * sh.mass * lum + 700 * sh.mass * sh.retro) * flick;
-      add(_v1, gcol(1, 0.3), gcol(0.5, 1), gcol(0.2, 0.4), I + 3000 * green, pl === this.plumeS1 && b.S2.status === 'stacked');
+      // TEA-TEB flash: a brief green tint on the steel, not the key light (at 3000 it out-lit the spooling
+      // flame ~4:1 for the first 0.3 s, and the pad engine cam read green-cream at T-3)
+      add(_v1, gcol(1, 0.3), gcol(0.5, 1), gcol(0.2, 0.4), I + 700 * green, pl === this.plumeS1 && b.S2.status === 'stacked');
       // ground/deck flash where the flame hits
       if (sh.planeDist < 60 && d.plane) {
         _v2.copy(d.origin).addScaledVector(ex, sh.planeDist - 1.5);

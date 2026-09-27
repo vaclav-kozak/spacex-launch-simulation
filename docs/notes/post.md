@@ -62,6 +62,23 @@ sunlit white ~2^1, plume-lit smoke at the pad 2^2..2^4.5, plume core 2^6+. Post 
   2 stops above the incident-light prior (sun + sky gray card at the focus). It fades in with the focus
   `sunVisibility` 0.2..0.8. Plume-lit smoke filling the frame then clips a little instead of dragging a
   morning sky to navy. At twilight and night the cap is off.
+* **Highlight cap** (`Meter.hiCap` = [percentile, max exposed stops, gate, instant, dark-focus stops]; uniform
+  `uHiCap`). A floor on the metered level, solved through the key curve (bisection in ADAPT_FRAG): the
+  histogram percentile may sit at most N stops (log2 over display white 1.0) once exposed. Morning and
+  onboard cams are unchanged (no `hiCap` on `onboard_*`, `deck`, `long_lens`).
+  * `pad`: [0.97, 1.3, 'dark', instant]. Gate = 1 - smoothstep(sunVisibility, 0.2, 0.8). Instant = the
+    adapted level snaps to the floor in the same frame instead of slewing. Before, at twilight/night
+    ignition turned a pad metered at ~2^-11.5 into a flame-lit one faster than the 24 EV/s slew, so the
+    engine cam at T-3 showed the mount as uniform cream-white. Now the steel reads warm, falls off with
+    distance and the flame core alone clips.
+  * cine cams (`METER_DEFAULT`: chase, orbit, cinematic ...): [0.99, 1.1, 'space', -, -0.4]. Gate = camera
+    altitude 75..110 km. The cap blends 1.1 → -0.4 as the focus leaves the sun. Morning chases already sit at
+    <= 0.85 (sunlit fairing at T+196 ~1.0), so they are unchanged. At twilight/night the dark frame had opened
+    2-2.5 stops and the MVac glow read as a white bulb in the S2 chase (T+460/492). Now the bell reads
+    orange, the throat is yellow-white and the unlit body is dim.
+  * Shots: `shots/fin/{mo,tw,ni}_{-8,3,460,492,505}.png` (director),
+    `{..}_pad_{m3,p0,p3}.png` (`director=0&cam=S1:pad:engine`, wait 5/8/11 from seek=-8) and
+    `{..}_chase{460,492}.png` (`director=0&cam=S2:chase`).
 * **Adaptation:** exponential (`speedUp` 3.5/s brighter, `speedDown` 1/s darker) with slew limits
   (24 EV/s stopping down at ignition, 4 EV/s opening up). A camera cut adapts 4x faster for 0.7 s.
 * **Local highlight compression** (`highlightCompress`, `compressStart` 4 stops over key, range 3.5 stops in

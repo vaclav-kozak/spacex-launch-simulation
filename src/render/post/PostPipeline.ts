@@ -92,13 +92,27 @@ interface Meter {
    *  incident light (sun + sky gray card at the focus) calls for, so plume-lit smoke filling the frame
    *  clips instead of dragging a blue sky to navy. Fades out as the sun leaves the focus. */
   dayCap?: number;
+  /** highlight-preserving meter: [histogram percentile, max exposed stops (log2 over display white 1.0)
+   *  at that percentile, gate, instant]. A floor on the metered level, solved through the key curve.
+   *  Gate 'dark': fades in as the sun leaves the focus (sunVisibility 0.8..0.2), so daylight keeps its
+   *  deliberate plume/smoke clipping. Gate 'space': fades in with the camera altitude (75..110 km), where a
+   *  dark frame holds a small sunlit or glowing subject and nothing else to expose for. instant: stop down
+   *  in the same frame (ignition at a dark pad) instead of slewing while the frame clips. Optional 5th:
+   *  max exposed stops once the sun has left the focus (sunVisibility 0.8..0.2 blend from the 2nd). */
+  hiCap?: [number, number, 'dark' | 'space', boolean, number?];
 }
-const METER_DEFAULT: Meter = { minEV: 0, maxEV: 0, skyW: 0.75, subjW: 2.5, center: 9, subjHead: 0 };
+// cine cams (chase, orbit, ...) in space: the top 1% (sunlit white paint, the MVac glow) stays ~1 stop over
+// display white. Morning chases sit at <= 0.85 there already (the sunlit fairing at T+196 ~1.0); at
+// twilight/night the dark frame had opened up 2-2.5 stops and the glowing bell read as a white bulb. With
+// the vehicle in Earth's shadow the bell is all there is: keep it well down the shoulder (dull orange).
+const METER_DEFAULT: Meter = { minEV: 0, maxEV: 0, skyW: 0.75, subjW: 2.5, center: 9, subjHead: 0, hiCap: [0.99, 1.1, 'space', false, -0.4] };
 const METERS: Partial<Record<string, Meter>> = {
   // long lens: small (often plume-dominated) subject on a big sky, let it run hotter so the sky keeps colour
   long_lens: { minEV: 0, maxEV: 0, skyW: 0.85, subjW: 3, center: 12, subjHead: 1.5 },
-  // pad cams: a flood-lit vehicle on a dark pad is allowed to run brighter (the sky stays visible)
-  pad: { minEV: 0, maxEV: 0, skyW: 0.7, subjW: 2, center: 7, subjHead: 1, dayCap: 2 },
+  // pad cams: a flood-lit vehicle on a dark pad is allowed to run brighter (the sky stays visible). At
+  // twilight / night the top 3% (flame-lit steel next to the plume) may run at most 1.3 stops over white,
+  // applied at once: ignition turns a dark pad (metered ~2^-11.5) into a flame-lit one within a frame.
+  pad: { minEV: 0, maxEV: 0, skyW: 0.7, subjW: 2, center: 7, subjHead: 1, dayCap: 2, hiCap: [0.97, 1.3, 'dark', true] },
   deck: { minEV: 2, maxEV: 0, skyW: 0.8, subjW: 1.5, center: 6, subjHead: 0.5, dayCap: 2 },
   onboard_down: { minEV: 3.5, maxEV: 0, skyW: 1, subjW: 1, center: 4, subjHead: 0, anchor: [-1.8, 8, 2] },
   onboard_engine: { minEV: 3.5, maxEV: 0, skyW: 1, subjW: 1, center: 4, subjHead: 0, anchor: [-1.8, 0.5, 1.5] },
@@ -378,6 +392,19 @@ export class PostPipeline {
         if (w > 0) maxL = Math.max(minL, THREE.MathUtils.lerp(maxL, Math.min(maxL, priorL + meter.dayCap), w));
       }
       (au.uClamp.value as THREE.Vector4).set(minL, maxL, 0, bias);
+      const hc = meter.hiCap;
+      let hw = 0;
+      if (hc) {
+        if (hc[2] === 'dark') hw = 1 - THREE.MathUtils.smoothstep(L.sunVisibility, 0.2, 0.8);
+        else {
+          const c = view.camWorldPos;
+          const alt = Math.hypot(c.x, c.y + ATMO.R, c.z) - ATMO.R;
+          hw = THREE.MathUtils.smoothstep(alt, 75_000, 110_000);
+        }
+      }
+      let capStops = hc ? hc[1] : 99;
+      if (hc && hc[4] !== undefined) capStops = THREE.MathUtils.lerp(hc[4], hc[1], THREE.MathUtils.smoothstep(L.sunVisibility, 0.2, 0.8));
+      (au.uHiCap.value as THREE.Vector4).set(hc ? hc[0] : 0.99, capStops, hw, hc && hc[3] ? 1 : 0);
       (au.uKey.value as THREE.Vector4).copy(keyU);
       (au.uKeyDeep.value as THREE.Vector3).set(mt.nightKeyStops * envLook.night, mt.darkLog + 4, mt.darkLog - 2);
       const fast = this.fastAdapt > 0 ? 4 : 1;

@@ -119,7 +119,7 @@ export class PostShared {
         tHist: t(), tPrev: t(), uMinLog: f(HIST_MIN_LOG), uLogRange: f(HIST_LOG_RANGE), uP: v4(), uClamp: v4(), uKey: v4(), uKeyDeep: { value: new THREE.Vector3() },
         uAdapt: v4(), uMaxRate: v2(), uSubj: v4(), uPrior: v4(),
         uManualL: f(), uSun: v4(), tBloom: t(), uBloomX: v4(), tDepth: t(), uDepthX: v4(), uSkyDepth: f(3e5),
-        uAspect: f(1), uSubjOverride: f(0), uSubjHint: f(0),
+        uAspect: f(1), uSubjOverride: f(0), uSubjHint: f(0), uHiCap: v4(),
       }),
       ghostCols: mat(GHOST_COLS_FRAG, { tSrc: t(), uSize: { value: new THREE.Vector2() }, tExp: t(), uAspect: f(1), uThreshold: f(4), uSunMask: v4() }),
       ghostReduce: mat(GHOST_REDUCE_FRAG, { tCols: t(), uCols: { value: 1 } }),

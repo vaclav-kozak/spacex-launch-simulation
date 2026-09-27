@@ -162,6 +162,17 @@ blender/      reproducible model and texture generators
 tools/audio/  offline callout generation (Kokoro TTS) and audio analysis
 ```
 
+## Known limitations
+
+- SECO is at about T+8:59, later than the webcast's ~8:45. The published second-stage propellant load and
+  MVac mass flow force a ~383 s burn.
+- In the twilight coast shot, the far-field "jellyfish" shells are softer than real footage and have less
+  filament structure. Clouds do not hide far plumes.
+- On a 60 Hz display, AUTO quality tops out at HIGH because vsync caps the frame time. Pick ULTRA by hand
+  if you want it.
+- Perf targets were estimated for a GTX 1650-class GPU from RTX 5070 Ti measurements. Lower-end GPUs should
+  use AUTO or LOW.
+
 ## Assets and licenses
 
 All models, VFX textures and sound effects are generated procedurally by the scripts in this repo.
