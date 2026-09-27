@@ -41,9 +41,11 @@ export class Spawn {
   /** trail decimation: level (trailing zeros of the sequence number), -1 = off; spawn spacing (m) */
   level = -1;
   spacing = 0;
+  /** elongation along a W axis (fast jets / expanding sheets): aspect 1 = round sprite */
+  axX = 0; axY = 1; axZ = 0; aspect = 1;
 }
 
-const STRIDE = 20;
+const STRIDE = 24;
 
 export interface ParticleEnv {
   t: number;
@@ -70,6 +72,7 @@ export class ParticleSystem {
   private seed: Float32Array; private prio: Float32Array; private lvl: Int8Array; private spc: Float32Array;
   private sunR: Float32Array; private sunG: Float32Array; private sunB: Float32Array;
   private shadow: Float32Array; private ambOcc: Float32Array; private plOcc: Float32Array;
+  private axX: Float32Array; private axY: Float32Array; private axZ: Float32Array; private asp: Float32Array;
   // render
   /** particles behind the plume (drawn before it) */
   readonly mesh: THREE.Mesh;
@@ -107,6 +110,7 @@ export class ParticleSystem {
     this.variant = f32(); this.turb = f32(); this.flags = new Uint8Array(max); this.spin = f32();
     this.seed = f32(); this.prio = f32(); this.lvl = new Int8Array(max); this.spc = f32();
     this.sunR = f32(); this.sunG = f32(); this.sunB = f32(); this.shadow = f32(); this.ambOcc = f32(); this.plOcc = f32();
+    this.axX = f32(); this.axY = f32(); this.axZ = f32(); this.asp = f32();
     this.keys = new Uint16Array(max); this.order = new Uint32Array(max); this.tmpIdx = new Uint32Array(max);
     this.relX = f32(); this.relY = f32(); this.relZ = f32(); this.curSize = f32(); this.curTau = f32(); this.curT = f32();
     this.curSortD = f32();
@@ -124,6 +128,7 @@ export class ParticleSystem {
       geo.setAttribute('iAlbEmis', A(8));
       geo.setAttribute('iSunAmb', A(12));
       geo.setAttribute('iMisc', A(16));
+      geo.setAttribute('iAxis', A(20));
       geo.instanceCount = 0;
       geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e9);
       return { geo, data, inst };
@@ -188,7 +193,7 @@ export class ParticleSystem {
         const score = this.prio[j] - this.age[j] / Math.max(this.life[j], 1e-3);
         if (score < bestScore) { bestScore = score; best = j; }
       }
-      if (best < 0 || this.prio[best] > s.prio) return -1;
+      if (best < 0 || this.prio[best] > s.prio) { s.aspect = 1; return -1; }
       i = best;
     } else this.count++;
     this.px[i] = s.x; this.py[i] = s.y; this.pz[i] = s.z;
@@ -210,6 +215,8 @@ export class ParticleSystem {
     sunRadianceAt(s.x, s.y, s.z, this.ctx.lighting.sunDir, this._c);
     this.sunR[i] = this._c.r; this.sunG[i] = this._c.g; this.sunB[i] = this._c.b;
     this.shadow[i] = 1; this.ambOcc[i] = 1; this.plOcc[i] = 1;
+    this.axX[i] = s.axX; this.axY[i] = s.axY; this.axZ[i] = s.axZ; this.asp[i] = s.aspect;
+    s.aspect = 1;
     return i;
   }
 
@@ -358,6 +365,7 @@ export class ParticleSystem {
     this.sunR[i] = this.sunR[last]; this.sunG[i] = this.sunG[last]; this.sunB[i] = this.sunB[last];
     this.shadow[i] = this.shadow[last]; this.ambOcc[i] = this.ambOcc[last]; this.plOcc[i] = this.plOcc[last];
     this.curSize[i] = this.curSize[last]; this.curTau[i] = this.curTau[last]; this.curT[i] = this.curT[last];
+    this.axX[i] = this.axX[last]; this.axY[i] = this.axY[last]; this.axZ[i] = this.axZ[last]; this.asp[i] = this.asp[last];
   }
 
   private gridFrame = 0;
@@ -466,11 +474,14 @@ export class ParticleSystem {
       D[o + 7] = this.curT[i];
       D[o + 8] = this.cr[i]; D[o + 9] = this.cg[i]; D[o + 10] = this.cb[i]; D[o + 11] = this.emis[i];
       const sh = this.shadow[i];
-      D[o + 12] = this.sunR[i] * sh; D[o + 13] = this.sunG[i] * sh; D[o + 14] = this.sunB[i] * sh;
+      // (some sunlight always diffuses through the cloud: multiple scattering keeps shadowed steam grey, not black)
+      const shl = 0.18 + 0.82 * sh;
+      D[o + 12] = this.sunR[i] * shl; D[o + 13] = this.sunG[i] * shl; D[o + 14] = this.sunB[i] * shl;
       D[o + 15] = this.ambOcc[i];
       D[o + 16] = this.flags[i] & P_THIN ? 1 : 0;
       D[o + 17] = this.age[i] / this.life[i];
       D[o + 18] = this.plOcc[i]; D[o + 19] = this.age[i];
+      D[o + 20] = this.axX[i]; D[o + 21] = this.axY[i]; D[o + 22] = this.axZ[i]; D[o + 23] = this.asp[i];
     }
     const mN = m - kSplit;
     this.geo.instanceCount = kSplit;
@@ -613,6 +624,7 @@ attribute vec4 iRotTauVarT;
 attribute vec4 iAlbEmis;
 attribute vec4 iSunAmb;
 attribute vec4 iMisc;
+attribute vec4 iAxis;   // W elongation axis, aspect (1 = round)
 uniform vec3 uPLPos[4];
 uniform vec3 uPLCol[4];
 uniform float uPLRange[4];
@@ -636,7 +648,18 @@ void main() {
   vec4 mvC = modelViewMatrix * vec4(wp, 1.0);
   float c = cos(rot), s = sin(rot);
   vec2 corner = position.xy;
-  vec2 off = vec2(c * corner.x - s * corner.y, s * corner.x + c * corner.y) * size;
+  vec2 cs = corner;
+  if (iAxis.w > 1.01) {
+    // elongated (jet / sheet): sprite x along the projected axis, same area
+    vec3 av = (modelViewMatrix * vec4(iAxis.xyz, 0.0)).xyz;
+    vec2 ap = av.xy;
+    float pl = length(ap);
+    float asp = 1.0 + (iAxis.w - 1.0) * clamp(pl, 0.0, 1.0);
+    if (pl > 1e-3) { c = ap.x / pl; s = ap.y / pl; }
+    float sa = sqrt(asp);
+    cs = vec2(corner.x * sa, corner.y / sa);
+  }
+  vec2 off = vec2(c * cs.x - s * cs.y, s * cs.x + c * cs.y) * size;
   vec4 mv = mvC + vec4(off, 0.0, 0.0);
   gl_Position = projectionMatrix * mv;
   #include <logdepthbuf_vertex>
@@ -660,13 +683,17 @@ void main() {
     pl += e;
     pd += normalize(d + 1e-4) * dot(e, vec3(0.3, 0.5, 0.2));
   }
-  vPL = pl * iMisc.z;
+  // (x0.04: look-dev measured plume-lit pad smoke at 2^2..2^4.5 scene units; night-launch photo
+  //  exposures put it at ~2^-3..2^-1.5 while the plume core (60-150) stays the brightest element.
+  //  Saturated toward deep orange so the tone mapper does not wash it to cream.)
+  float plL = dot(pl, vec3(0.3, 0.5, 0.2));
+  vPL = max(mix(vec3(plL), pl, 1.35), 0.0) * iMisc.z * 0.04;
   vPLDir = normalize((modelViewMatrix * vec4(pd + vec3(0.0, 1e-6, 0.0), 0.0)).xyz);
   vAT = aerialTransmittance(wp);
   vAI = aerialInscatter(wp);
   // fade puffs that engulf the camera (avoids full-screen blobs + near-plane popping)
   float dc = length(mvC.xyz);
-  vNear = smoothstep(size * 0.35, size * 1.1, dc);
+  vNear = smoothstep(size * 0.35, size * 1.1, dc) * smoothstep(2.0, 6.0, dc);
   vNoise = vec3(seed * 7.13, seed * 3.71, iMisc.w * 0.035 + seed * 11.0);
 }
 `;
@@ -700,7 +727,9 @@ void main() {
   vec2 uv = vec2(vUv.x, 1.0 - vUv.y);            // atlas rows are stored top-down (flipY = false)
   vec4 tex = texture2D(uPuffs, vCell.xy + uv * vec2(0.25, 0.5));
   float dens = tex.a;
-  if (dens < 0.004) discard;
+  // invisible texels: skip the noise (threshold on the resulting opacity, tiny so that faint,
+  // heavily exposed high-altitude gas shows no cut-off edge)
+  if (dens < 0.004 || (vTauTSize.x * dens < 2e-4 && vTauTSize.y < 700.0)) discard;
   float billowy = vCell.y < 0.25 ? 1.0 : 0.0;
   // evolving erosion: eats into the rim and thin parts so puffs never read as flat cut-outs
   float en = n3(vec3(vUv * 0.55, 0.0) + vNoise);
@@ -713,7 +742,9 @@ void main() {
   float size = vTauTSize.z;
   float soft = clamp((sceneZ - viewZ) / (size * 0.45 + 0.3), 0.0, 1.0);
   if (soft <= 0.0) discard;
-  float thin = vTauTSize.w;
+  // an optically thin puff (fresh wisp or a fading, expanded one) has no surface to shade: blend it
+  // toward the thin-gas phase lighting, otherwise its sprite normals rim-light a hard arc
+  float thin = max(vTauTSize.w, exp(-1.5 * vTauTSize.x));
   // sprite-space normal -> view space (rotate with the sprite)
   vec2 nxy = tex.rg * 2.0 - 1.0;
   nxy = nxy * 0.85 + vec2(en - 0.5, en2 - 0.5) * 0.3;
@@ -726,14 +757,22 @@ void main() {
   // dense steam: lambert with a soft terminator + multiple-scattering floor + silver lining;
   // thin gas: phase function (strong forward scattering toward the sun)
   float lamb = clamp((ndl + 0.15) / 1.15, 0.0, 1.0);
-  float silver = hgPhase(cosT, 0.8) * 12.566 * pow(1.0 - dens, 3.0) * 0.3;
-  float denseTerm = lamb * mix(0.55, 1.0, ao) + 0.16 * ao + silver;
-  float thinTerm = mix(1.0, hgPhase(cosT, 0.65) * 12.566, 0.75);
+  // diffuse transmission through the puff (multiple scattering, g ~ 0.85: 1 / (1 + 0.75 (1 - g) tau)):
+  // a backlit steam puff glows through instead of going near-black against the light
+  float odV = vTauTSize.x * dens;
+  float transD = 0.8 / (1.0 + 0.11 * odV);
+  lamb = max(lamb, transD * clamp(-ndl, 0.0, 1.0));
+  // silver lining keyed on the optical depth through this texel (not on the raw sprite density):
+  // an optically thin puff forward-scatters evenly instead of drawing a bright ring at its rim
+  float silver = hgPhase(cosT, 0.8) * 12.566 * exp(-1.3 * vTauTSize.x * dens) * 0.3;
+  float denseTerm = lamb * mix(0.65, 1.0, ao) + 0.26 * mix(0.6, 1.0, ao) + silver;
+  float thinTerm = mix(1.0, hgPhase(cosT, 0.55) * 12.566, 0.65);
   float sunTerm = mix(denseTerm, thinTerm, thin);
   float nu = dot(n, uUpView);
   vec3 amb = uAmbCol * (0.62 + 0.38 * nu) * vAmb + uGndCol * (0.5 - 0.5 * nu) * 0.6;
   float plW = clamp((dot(n, vPLDir) + 0.6) / 1.6, 0.0, 1.0);
-  vec3 E = vSun * sunTerm + amb * mix(1.0, ao, billowy) + vPL * mix(plW * mix(0.6, 1.0, ao), 0.8, thin);
+  plW = max(plW, transD * clamp(-dot(n, vPLDir), 0.0, 1.0));
+  vec3 E = vSun * sunTerm + amb * mix(1.0, ao, billowy * 0.6) + vPL * mix(plW * mix(0.6, 1.0, ao), 0.8, thin);
   vec3 lit = vAlbEmis.rgb * E * 0.3183;
   float alpha = (1.0 - exp(-vTauTSize.x * dens)) * soft * vNear;
   // blackbody emission (fire / glowing exhaust), independent of opacity

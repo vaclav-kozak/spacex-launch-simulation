@@ -158,20 +158,22 @@ float density(vec3 p) {
   float y0 = yb + 1.4;
   float along = y0 - y;
   float inR = mix(Rf * 0.99, Rb, clamp(along / 1.4, 0.0, 1.0));
-  float outR = inR + 0.45 + along * 0.42 + 0.5 * (st - 0.5);
+  // a thin translucent sheath hugging the body (not a thick ring): thickens slowly aft
+  float thick = max(0.3 + along * 0.16 + 0.3 * (st - 0.5), 0.12);
+  float outR = inR + thick;
   float shock = L * (0.78 + 0.45 * (big - 0.5) + 0.25 * (st - 0.5));
-  float band = smoothstep(inR - 0.05, inR + 0.12, r) * (1.0 - smoothstep(outR - 0.9, outR + 0.3, r));
+  float band = smoothstep(inR - 0.05, inR + 0.1, r) * (1.0 - smoothstep(outR - thick * 0.6, outR + 0.15, r));
   float ax = smoothstep(-0.15, 0.25, along) * (1.0 - smoothstep(shock - 2.6, shock + 0.4, along));
-  float dens1 = mix(1.0, 0.45, clamp(along / max(L, 1.0), 0.0, 1.0));   // thins as it expands
-  d += uC.x * band * ax * dens1 * (0.25 + 0.75 * smoothstep(0.25, 0.6, st)) * 9.0;
+  float dens1 = mix(1.0, 0.35, clamp(along / max(L, 1.0), 0.0, 1.0));   // thins as it expands
+  d += uC.x * band * ax * dens1 * (0.35 + 0.65 * smoothstep(0.3, 0.62, st)) * 2.0;
   // 2) interstage / grid-fin region: patchy sheath hugging the body
   float yi = -1.0;
   float al2 = yi - y + 3.5;
   float inR2 = Rb + 0.02;
-  float out2 = inR2 + 0.35 + max(al2, 0.0) * 0.25 + 0.4 * (st - 0.5);
-  float band2 = smoothstep(inR2 - 0.05, inR2 + 0.1, r) * (1.0 - smoothstep(out2 - 0.3, out2 + 0.1, r));
+  float out2 = inR2 + max(0.25 + max(al2, 0.0) * 0.1 + 0.25 * (st - 0.5), 0.1);
+  float band2 = smoothstep(inR2 - 0.05, inR2 + 0.1, r) * (1.0 - smoothstep(out2 - 0.2, out2 + 0.1, r));
   float ax2 = smoothstep(-0.2, 0.6, al2) * (1.0 - smoothstep(L * 0.55, L * 0.75, al2 + 2.0 * (big - 0.5)));
-  d += uC.y * band2 * ax2 * (0.15 + 0.85 * smoothstep(0.35, 0.65, st)) * 6.0;
+  d += uC.y * band2 * ax2 * (0.15 + 0.85 * smoothstep(0.35, 0.65, st)) * 2.0;
   return d;
 }
 

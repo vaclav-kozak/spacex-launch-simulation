@@ -69,8 +69,10 @@ export class PadEmitter {
       s.life = 140 + 90 * R(); s.tau = 42; s.fadeIn = 0.25;
       s.drag = 2.2 + R(); s.buoy = 2.2 + 1.5 * R(); s.buoyTau = 30;
       const w = 0.92 - 0.05 * R();
-      s.r = w - early * 0.4; s.g = w - early * 0.47; s.b = w + 0.02 - early * 0.55;
-      s.temp = early > 0.3 || R() < 0.25 ? 1500 + 500 * R() : 0; s.tempTau = 0.35; s.emis = 6;
+      // (the fuel-rich start only greys the very first puffs a little; the cloud is deluge steam)
+      s.r = w - early * 0.14; s.g = w - early * 0.16; s.b = w + 0.02 - early * 0.2;
+      // (emission kept low: glowing steam puffs out-shone the smoke's plume light at night)
+      s.temp = early > 0.3 || R() < 0.25 ? 1500 + 500 * R() : 0; s.tempTau = 0.35; s.emis = 2.5;
       s.variant = (R() * 4) | 0; s.turb = 2.5; s.flags = P_GROUND | P_PADGRID; s.spin = RS() * 0.05; s.prio = 3;
       s.level = -1;
       ps.emit();
@@ -87,21 +89,22 @@ export class PadEmitter {
       s.life = 1.2 + R() * 0.8; s.tau = 1.5; s.fadeIn = 0.03;
       s.drag = 0.8; s.buoy = 4; s.buoyTau = 2;
       s.r = 0.25; s.g = 0.2; s.b = 0.17;
-      s.temp = 2150 + 250 * R(); s.tempTau = 0.45; s.emis = 22;
+      s.temp = 2150 + 250 * R(); s.tempTau = 0.45; s.emis = 14;
       s.variant = (R() * 4) | 0; s.turb = 3; s.flags = P_GROUND; s.spin = RS() * 0.8; s.prio = 1;
       s.level = -1;
       ps.emit();
     }
     // --- deluge steam boiling up around the launch mount
-    this.acc.mount += dt * 30 * q * th * smooth(70, 4, hN);
+    this.acc.mount += dt * 18 * q * th * smooth(70, 4, hN);
     while (this.acc.mount >= 1) {
       this.acc.mount -= 1;
       const a = R() * Math.PI * 2, rr = 5 + 9 * R();
       s.x = inp.gx + Math.cos(a) * rr; s.y = g0 + R() * 3; s.z = inp.gz + Math.sin(a) * rr;
-      const out = 4 + 10 * R();
-      s.vx = Math.cos(a) * out; s.vy = 6 + 12 * R(); s.vz = Math.sin(a) * out;
-      s.size0 = 2.5 + 2 * R(); s.size1 = 14 + 10 * R(); s.sizeTau = 7; s.sizeDiff = 0.8;
-      s.life = 60 + 50 * R(); s.tau = 30; s.fadeIn = 0.3;
+      // (rises as a veil around the mount rather than rolling out over the close pad cameras)
+      const out = 2 + 4 * R();
+      s.vx = Math.cos(a) * out; s.vy = 7 + 12 * R(); s.vz = Math.sin(a) * out;
+      s.size0 = 2.5 + 2 * R(); s.size1 = 10 + 8 * R(); s.sizeTau = 7; s.sizeDiff = 0.8;
+      s.life = 45 + 40 * R(); s.tau = 14; s.fadeIn = 0.3;
       s.drag = 1.5; s.buoy = 1.8; s.buoyTau = 20;
       s.r = 0.93; s.g = 0.93; s.b = 0.95;
       s.temp = 0; s.emis = 0;
@@ -122,7 +125,7 @@ export class PadEmitter {
       s.life = 120 + 80 * R(); s.tau = 34; s.fadeIn = 0.3;
       s.drag = 2.4; s.buoy = 1.8; s.buoyTau = 30;
       s.r = 0.88; s.g = 0.87; s.b = 0.86;
-      s.temp = hN < 60 && R() < 0.3 ? 1700 : 0; s.tempTau = 0.3; s.emis = 8;
+      s.temp = hN < 60 && R() < 0.3 ? 1700 : 0; s.tempTau = 0.3; s.emis = 3;
       s.variant = (R() * 4) | 0; s.turb = 2; s.flags = P_GROUND | P_PADGRID; s.spin = RS() * 0.05; s.prio = 3;
       s.level = -1;
       ps.emit();
@@ -160,7 +163,7 @@ export class TrailEmitter {
     const nMax = 40;
     let n = 0;
     const ex = sh.ex;
-    const low = 1 - smooth(18000, 40000, alt);
+    const low = 1 - smooth(16000, 34000, alt);
     const contrail = smooth(6000, 9000, alt) * (1 - smooth(14000, 20000, alt));
     const s = ps.s;
     while (this.dist >= spacing && n < nMax) {
@@ -187,7 +190,9 @@ export class TrailEmitter {
       s.sizeDiff = 2.2 * low + 30 * ex;
       s.life = low > 0.5 ? 170 + 60 * R() : 110 + 50 * R();
       const thin = 1 - low;
-      s.tau = (low * (1.5 + 1.8 * contrail) + thin * 0.3 * (1 - 0.6 * smooth(30000, 60000, alt))) * Math.min(1, Math.sqrt(sh.mass / 9) + 0.25) * (retro > 0.3 ? 0.6 : 1);
+      // (above ~30 km the km-wide trail is tenuous: faint in daylight, a glowing veil only at
+      //  twilight; long lenses look along it through dozens of overlapping puffs)
+      s.tau = (low * (1.5 + 1.8 * contrail) + thin * 0.25 * (1 - 0.985 * smooth(26000, 62000, alt))) * Math.min(1, Math.sqrt(sh.mass / 9) + 0.25) * (retro > 0.3 ? 0.6 : 1);
       s.fadeIn = low > 0.5 ? 0.8 : 1.5;
       s.drag = retro > 0.3 ? 0.03 : low > 0.5 ? 2.5 : 1.5;
       s.buoy = 0.4 * low; s.buoyTau = 30;
@@ -210,6 +215,7 @@ export class TrailEmitter {
 
 const _v = new THREE.Vector3();
 const _d = new THREE.Vector3();
+const _t = new THREE.Vector3();
 
 /** Cold-gas N2 RCS puffs (S1 pods near the interstage top). */
 export class RcsEmitter {
@@ -234,18 +240,23 @@ export class RcsEmitter {
       }
       _v.applyQuaternion(b.quat).add(b.pos);
       _d.applyQuaternion(b.quat).normalize();
-      this.acc[i] += dt * 70 * q * f;
+      this.acc[i] += dt * 55 * q * f;
       if (this.acc[i] < 1 && f > 0.02 && this.acc[i] > 0) this.acc[i] = Math.max(this.acc[i], 1); // first puff immediately
       const s = ps.s;
       while (this.acc[i] >= 1) {
         this.acc[i] -= 1;
-        const sp = 60 + 60 * R();
+        // cold N2 leaves at ~700 m/s: in thin air each burst is a fast, thin, quickly expanding
+        // jet that is gone within half a second (optical depth falls as 1/size^2)
+        const sp = (60 + 60 * R()) * (1 + 2.2 * vac);
+        const spread = 0.3 + 0.45 * vac;
         s.x = _v.x + _d.x * 0.3; s.y = _v.y + _d.y * 0.3; s.z = _v.z + _d.z * 0.3;
-        s.vx = b.vel.x + (_d.x + RS() * 0.3) * sp;
-        s.vy = b.vel.y + (_d.y + RS() * 0.3) * sp;
-        s.vz = b.vel.z + (_d.z + RS() * 0.3) * sp;
-        s.size0 = 0.35; s.size1 = 3 + 9 * vac + 2 * R(); s.sizeTau = 0.45 + 0.4 * R(); s.sizeDiff = 0.5;
-        s.life = 1.2 + 1.2 * R(); s.tau = 3.5 + 3 * (1 - vac); s.fadeIn = 0.02;
+        s.vx = b.vel.x + (_d.x + RS() * spread) * sp;
+        s.vy = b.vel.y + (_d.y + RS() * spread) * sp;
+        s.vz = b.vel.z + (_d.z + RS() * spread) * sp;
+        // (in vacuum: a wide, fast-fading fan rather than a chain of discrete puffs)
+        s.size0 = 0.35; s.size1 = 3 + 40 * vac + 3 * R(); s.sizeTau = 0.45 - 0.15 * vac + 0.3 * R(); s.sizeDiff = 0.5 * (1 - vac);
+        s.life = (1.2 + 1.2 * R()) * (1 - 0.6 * vac); s.tau = 1.8 + 4.7 * (1 - vac); s.fadeIn = 0.02;
+        s.axX = _d.x; s.axY = _d.y; s.axZ = _d.z; s.aspect = 1 + 1.3 * vac;
         s.drag = 0.25; s.buoy = 0; s.buoyTau = 1;
         s.r = 0.96; s.g = 0.97; s.b = 1.0;
         s.temp = 0; s.emis = 0;
@@ -268,11 +279,14 @@ export class EventPuffs {
     for (let i = 0; i < n; i++) {
       const a = (i / n) * Math.PI * 2 + RS() * 0.1;
       _d.set(Math.cos(a), RS() * 0.3, Math.sin(a)).applyQuaternion(s1.quat);
-      const sp = 20 + 45 * R();
+      // residual pusher gas / interstage vent: a thin sunlit sheet racing outward, gone in ~1 s
+      const sp = (30 + 50 * R()) * (1 + vac);
       s.x = _v.x + _d.x * 1.9; s.y = _v.y + _d.y * 1.9; s.z = _v.z + _d.z * 1.9;
       s.vx = (s1.vel.x + s2.vel.x) * 0.5 + _d.x * sp; s.vy = (s1.vel.y + s2.vel.y) * 0.5 + _d.y * sp; s.vz = (s1.vel.z + s2.vel.z) * 0.5 + _d.z * sp;
-      s.size0 = 0.8; s.size1 = 6 + 16 * vac * R() + 4; s.sizeTau = 0.9; s.sizeDiff = 1;
-      s.life = 2 + 2 * R(); s.tau = 3; s.fadeIn = 0.02;
+      s.size0 = 0.6; s.size1 = 8 + (22 + 14 * R()) * vac; s.sizeTau = 0.7; s.sizeDiff = 1 - vac;
+      s.life = (2 + 2 * R()) * (1 - 0.6 * vac); s.tau = 2.2; s.fadeIn = 0.02;
+      _t.set(-Math.sin(a), 0, Math.cos(a)).applyQuaternion(s1.quat); // tangential: an expanding ring sheet
+      s.axX = _t.x; s.axY = _t.y; s.axZ = _t.z; s.aspect = 1 + 2 * vac;
       s.drag = 0.3; s.buoy = 0; s.buoyTau = 1;
       s.r = 0.95; s.g = 0.96; s.b = 0.98; s.temp = 0; s.emis = 0;
       s.variant = 4 + ((R() * 4) | 0); s.turb = 0; s.flags = P_THIN | P_NOWIND; s.spin = RS() * 0.4; s.prio = 3;
@@ -317,16 +331,19 @@ export class EventPuffs {
       _v.set(ex, -0.3, ez).applyQuaternion(b.quat).add(b.pos);
       const n = Math.max(1, Math.round((start ? 4 : 5) * q));
       for (let i = 0; i < n; i++) {
-        const sp = (start ? 40 : 25) + 40 * R();
+        // in thin air the fuel-rich transient gas is not stopped by anything: it streams away at
+        // hundreds of m/s and thins out into a faint wisp within a second
+        const sp = ((start ? 40 : 25) + 40 * R()) * (1 + 5 * thinAir);
+        const jit = 10 + 60 * thinAir;
         s.x = _v.x; s.y = _v.y; s.z = _v.z;
-        s.vx = b.vel.x * (thinAir) + exhaustDir.x * sp + RS() * 10;
-        s.vy = b.vel.y * (thinAir) + exhaustDir.y * sp + RS() * 10;
-        s.vz = b.vel.z * (thinAir) + exhaustDir.z * sp + RS() * 10;
-        // in thin air the transient gas balloons into a big, soft, translucent cloud
-        s.size0 = 0.8; s.size1 = 5 + 34 * thinAir + 4 * R(); s.sizeTau = 1.2 - 0.5 * thinAir; s.sizeDiff = 0.8 + 3 * thinAir;
-        s.life = 2.5 + 2 * R(); s.tau = (start ? 4 : 2.5) * (1 - 0.7 * thinAir); s.fadeIn = 0.05;
+        s.vx = b.vel.x * (thinAir) + exhaustDir.x * sp + RS() * jit;
+        s.vy = b.vel.y * (thinAir) + exhaustDir.y * sp + RS() * jit;
+        s.vz = b.vel.z * (thinAir) + exhaustDir.z * sp + RS() * jit;
+        s.size0 = 0.8; s.size1 = 5 + 55 * thinAir + 4 * R(); s.sizeTau = 1.2 - 0.6 * thinAir; s.sizeDiff = 0.8 * (1 - thinAir);
+        s.life = (2.5 + 2 * R()) * (1 - 0.6 * thinAir); s.tau = (start ? 4 : 2.5) * (1 - 0.4 * thinAir); s.fadeIn = 0.03;
         s.drag = 0.6 * (1 - thinAir); s.buoy = 1 - thinAir; s.buoyTau = 3;
-        const g = 0.3 + 0.35 * thinAir;
+        s.axX = exhaustDir.x; s.axY = exhaustDir.y; s.axZ = exhaustDir.z; s.aspect = 1 + 3 * thinAir;
+        const g = 0.3 + 0.5 * thinAir;
         s.r = g; s.g = g * 0.85; s.b = g * 0.72;
         s.temp = start ? 1300 : 1600; s.tempTau = 0.4 - 0.2 * thinAir; s.emis = 5;
         s.variant = thinAir > 0.5 ? 4 + ((R() * 4) | 0) : (R() * 4) | 0; s.turb = 1 - thinAir;
@@ -382,14 +399,15 @@ export class LandingEmitter {
         s.drag = 0.5; s.buoy = 3; s.buoyTau = 1;
         s.r = 0.3; s.g = 0.26; s.b = 0.23;
         s.temp = 2300 + 200 * R(); s.tempTau = 0.35; s.emis = 26;
-        s.variant = (R() * 4) | 0; s.turb = 0; s.flags = P_DECK | P_OCEAN; s.spin = RS(); s.prio = 2;
+        s.variant = R() < 0.5 ? (R() * 4) | 0 : 4 + ((R() * 4) | 0); s.turb = 0; s.flags = P_DECK | P_OCEAN; s.spin = RS(); s.prio = 2;
+        s.axX = dx; s.axY = dy; s.axZ = dz; s.aspect = 3.2; // radial flame sheet: streaks racing outward
         s.level = -1;
         ps.emit();
       }
       // steam / smoke boiling off the wet deck
       // (dense and continuous: the wall jet piles a boiling cloud onto the deck that engulfs the
       //  legs and octaweb, then rolls off the edges)
-      this.acc.steam += dt * 120 * q * I;
+      this.acc.steam += dt * 75 * q * I;
       while (this.acc.steam >= 1) {
         this.acc.steam -= 1;
         const a = R() * Math.PI * 2;
@@ -399,10 +417,12 @@ export class LandingEmitter {
         const r0 = 2 + 5 * R();
         s.x = hx + dx * r0 + U.x * 0.8; s.y = hy + dy * r0 + U.y * 0.8; s.z = hz + dz * r0 + U.z * 0.8;
         s.vx = dx * sp + U.x * 2 * R(); s.vy = dy * sp + U.y * 2 * R(); s.vz = dz * sp + U.z * 2 * R();
-        s.size0 = 1.5 + 1.5 * R(); s.size1 = 9 + 9 * R(); s.sizeTau = 1.6; s.sizeDiff = 0.8;
-        s.life = 18 + 20 * R(); s.tau = 10; s.fadeIn = 0.08;
-        s.drag = 2.4; s.buoy = 2.5; s.buoyTau = 10;
-        s.r = 0.86; s.g = 0.85; s.b = 0.84;
+        // (translucent and short-lived: the sea wind strips it off the deck within ~5-8 s, so the
+        //  booster stays partly visible through it and reads clearly soon after touchdown)
+        s.size0 = 1.5 + 1.5 * R(); s.size1 = 10 + 10 * R(); s.sizeTau = 1.4; s.sizeDiff = 1.6;
+        s.life = 4 + 4 * R(); s.tau = 4.5; s.fadeIn = 0.08;
+        s.drag = 0.7; s.buoy = 1.4; s.buoyTau = 6;
+        s.r = 0.93; s.g = 0.93; s.b = 0.93;
         s.temp = R() < 0.3 ? 1600 : 0; s.tempTau = 0.25; s.emis = 6;
         s.variant = (R() * 4) | 0; s.turb = 1.5; s.flags = P_DECK | P_OCEAN; s.spin = RS() * 0.1; s.prio = 3;
         s.level = -1;
@@ -431,6 +451,7 @@ export class LandingEmitter {
         s.r = 0.92; s.g = 0.94; s.b = 0.96;
         s.temp = 0; s.emis = 0;
         s.variant = ((R() * 8) | 0); s.turb = 1; s.flags = P_OCEAN; s.spin = RS() * 0.2; s.prio = 2;
+        s.axX = ddx / dl; s.axY = ddy / dl; s.axZ = ddz / dl; s.aspect = 1.8;
         s.level = -1;
         ps.emit();
       }
@@ -463,17 +484,18 @@ export class LandingEmitter {
     if (!landed && t < this.touchdownT) this.touchdownT = -Infinity; // time jumped back
     if (this.touchdownT > -Infinity && thrustFrac < 0.05) {
       const age = t - this.touchdownT;
-      const k = Math.exp(-age / 30);
-      this.acc.linger += dt * 16 * q * k;
+      // (stops after ~10 s: a lone late puff read as a cotton ball on the clear deck)
+      const k = age < 10 ? Math.exp(-age / 3.5) : 0;
+      this.acc.linger += dt * 6 * q * k;
       while (this.acc.linger >= 1) {
         this.acc.linger -= 1;
         const a = R() * Math.PI * 2, rr = 1 + 9 * R();
         s.x = s1.pos.x + Math.cos(a) * rr * 1 + U.x; s.y = s1.pos.y + U.y * (0.5 + R() * 2); s.z = s1.pos.z + Math.sin(a) * rr;
         s.vx = Math.cos(a) * 2 + U.x * (2 + 2 * R()); s.vy = U.y * (2 + 2 * R()); s.vz = Math.sin(a) * 2 + U.z * (2 + 2 * R());
-        s.size0 = 2 + 2 * R(); s.size1 = 12 + 8 * R(); s.sizeTau = 10; s.sizeDiff = 0.6;
-        s.life = 30 + 30 * R(); s.tau = 8; s.fadeIn = 1;
-        s.drag = 2; s.buoy = 1.2; s.buoyTau = 20;
-        const w = 0.72 + 0.15 * R();
+        s.size0 = 2 + 2 * R(); s.size1 = 12 + 8 * R(); s.sizeTau = 3; s.sizeDiff = 1.2;
+        s.life = 5 + 4 * R(); s.tau = 1.4 * (0.3 + 0.7 * k); s.fadeIn = 0.5;
+        s.drag = 0.6; s.buoy = 0.7; s.buoyTau = 8;
+        const w = 0.88 + 0.07 * R();
         s.r = w; s.g = w * 0.98; s.b = w * 0.96;
         s.temp = 0; s.emis = 0;
         s.variant = (R() * 4) | 0; s.turb = 1; s.flags = P_DECK | P_OCEAN; s.spin = RS() * 0.05; s.prio = 2;

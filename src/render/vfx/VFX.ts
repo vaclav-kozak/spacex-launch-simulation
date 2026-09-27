@@ -165,6 +165,7 @@ export class VFX implements FrameModule {
 
   beforeViewRender(view: ViewInfo, _snap: SimSnapshot): void {
     if (!this.ready) return;
+    this.fadeHazeForView(view.camWorldPos, view.camera);
     this.plumeS1.prepareView(view);
     this.plumeS2.prepareView(view);
     this.cond.prepareView(view);
@@ -309,6 +310,8 @@ export class VFX implements FrameModule {
       s.drag = 0.5; s.buoy = 0; s.buoyTau = 1;
       s.r = 0.95; s.g = 0.96; s.b = 0.98; s.temp = 0; s.emis = 0;
       s.variant = 4 + ((Math.random() * 4) | 0); s.turb = 0; s.flags = P_THIN; s.spin = 0; s.prio = 1; s.level = -1;
+      _v2.set(0, 1, 0).applyQuaternion(S1.quat); // shed vapor is smeared along the flow
+      s.axX = _v2.x; s.axY = _v2.y; s.axZ = _v2.z; s.aspect = 3;
       this.ps.emit();
     }
   }
@@ -329,8 +332,10 @@ export class VFX implements FrameModule {
       const green = Math.max(...d.green);
       const gcol = (x: number, gx: number) => x * (1 - green) + gx * green;
       if (pl.kind === 'mvac') {
-        _v1.copy(d.origin).addScaledVector(ex, 2);
-        add(_v1, gcol(0.6, 0.3), gcol(0.5, 1), gcol(1, 0.4), 60 * sh.mass * flick + 400 * green);
+        // dim warm light from inside the nozzle extension (the glowing niobium skirt / hot throat);
+        // the vacuum plume itself emits almost nothing
+        _v1.copy(d.origin).addScaledVector(ex, -1.2);
+        add(_v1, gcol(1, 0.3), gcol(0.55, 1), gcol(0.3, 0.4), 14 * sh.mass * flick + 400 * green);
         continue;
       }
       const lum = sh.lumBright;
@@ -339,7 +344,7 @@ export class VFX implements FrameModule {
       if (sh.planeDist < Infinity) dist = Math.min(dist, sh.planeDist * 0.6);
       _v1.copy(d.origin).addScaledVector(ex, dist);
       const I = (1300 * sh.mass * lum + 700 * sh.mass * sh.retro) * flick;
-      add(_v1, gcol(1, 0.3), gcol(0.6, 1), gcol(0.3, 0.4), I + 3000 * green);
+      add(_v1, gcol(1, 0.3), gcol(0.5, 1), gcol(0.2, 0.4), I + 3000 * green);
       // ground/deck flash where the flame hits
       if (sh.planeDist < 60 && d.plane) {
         _v2.copy(d.origin).addScaledVector(ex, sh.planeDist - 1.5);
@@ -352,7 +357,7 @@ export class VFX implements FrameModule {
     const hN = S1.altitude - PAD_ELEVATION;
     if (hN < 120 && this.plumeS1.active && Math.hypot(S1.pos.x, S1.pos.z) < 600) {
       _v1.copy(TRENCH_EXIT).setY(PAD_ELEVATION + 6);
-      add(_v1, 1, 0.5, 0.2, 5000 * this.thrustFrac(S1) * smooth(80, 10, hN) * flick);
+      add(_v1, 1, 0.42, 0.12, 5000 * this.thrustFrac(S1) * smooth(80, 10, hN) * flick);
     }
     // landed smoulder
     if (this.landing.touchdownT > -Infinity) {
@@ -427,8 +432,35 @@ export class VFX implements FrameModule {
       hz.strength = this.landing.impinge;
       out.push(hz); k++;
     }
+    for (let i = 0; i < out.length; i++) this.hzBase[i] = out[i].strength;
   }
   private hzPool: { start: THREE.Vector3; end: THREE.Vector3; radius0: number; radius1: number; strength: number }[] = [];
+  private hzBase: number[] = [];
+  /** Per view: a haze capsule that passes through / right next to the camera, or that reaches
+   *  behind the camera plane (a column seen from below), projects to a degenerate screen capsule
+   *  (huge radius, clipped axis) and post's distortion noise smears into streaks (pad "up" cam).
+   *  Fade such sources out for this view only. */
+  private fadeHazeForView(cam: THREE.Vector3, camera: THREE.Camera): void {
+    const src = this.ctx.hazeSources;
+    const e = camera.matrixWorld.elements;
+    const fx = -e[8], fy = -e[9], fz = -e[10];
+    for (let i = 0; i < src.length; i++) {
+      const hz = src[i];
+      const base = this.hzBase[i] ?? hz.strength;
+      _v1.subVectors(hz.end, hz.start);
+      _v2.subVectors(cam, hz.start);
+      const L2 = _v1.lengthSq();
+      const h = L2 > 1e-6 ? clamp01(_v2.dot(_v1) / L2) : 0;
+      const d = _v2.addScaledVector(_v1, -h).length();
+      const r = hz.radius0 + (hz.radius1 - hz.radius0) * h;
+      const zs = (hz.start.x - cam.x) * fx + (hz.start.y - cam.y) * fy + (hz.start.z - cam.z) * fz;
+      const ze = (hz.end.x - cam.x) * fx + (hz.end.y - cam.y) * fy + (hz.end.z - cam.z) * fz;
+      const zmin = Math.min(zs, ze);
+      // (both ends behind the camera: post culls it anyway)
+      const depthK = Math.max(zs, ze) < 0 ? 1 : smooth(0.5 * Math.max(hz.radius0, hz.radius1), 2 * Math.max(hz.radius0, hz.radius1), zmin);
+      hz.strength = base * smooth(r * 1.2, r * 2.4, d) * depthK;
+    }
+  }
 
   // ------------------------------------------------------------------------------------------
   /** Time jumped (?seek, replay start, restart): rebuild a plausible particle state. */
@@ -518,13 +550,13 @@ export class VFX implements FrameModule {
       const y = a * p0.y + bb * ctrl.y + c * end.y;
       const z = a * p0.z + bb * ctrl.z + c * end.z;
       const alt = y; // near-pad approximation for the part of the trail that matters visually
-      const low = 1 - smooth(18000, 40000, alt);
+      const low = 1 - smooth(16000, 34000, alt); // (matches TrailEmitter)
       const ws = windScale(alt);
       s.x = x + snap.wind.x * ws * age * low; s.y = y; s.z = z + snap.wind.z * ws * age * low;
       s.vx = snap.wind.x * ws * low; s.vy = 0; s.vz = snap.wind.z * ws * low;
       const R0 = 4 + alt * 0.004 * (1 - low) * 20;
       s.size0 = R0; s.size1 = R0 * 2 + 30 * low + 400 * (1 - low); s.sizeTau = 40; s.sizeDiff = 2.2 * low;
-      s.life = 200 + 40 * hashN(i); s.tau = low * 1.6 + (1 - low) * 0.5; s.fadeIn = 0.01;
+      s.life = 200 + 40 * hashN(i); s.tau = low * 1.6 + (1 - low) * 0.25 * (1 - 0.985 * smooth(26000, 62000, alt)); s.fadeIn = 0.01;
       s.drag = 2.5; s.buoy = 0; s.buoyTau = 30;
       s.r = 0.8 * low + 0.88 * (1 - low); s.g = 0.79 * low + 0.92 * (1 - low); s.b = 0.78 * low + (1 - low);
       s.temp = 0; s.emis = 0;
