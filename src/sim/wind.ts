@@ -34,6 +34,8 @@ export class WindModel {
   /** direction the jet stream blows from (deg) */
   jetFromDeg = 285;
   enabled = true;
+  /** false: mean wind only (deterministic pre-sim of the day-of-launch winds) */
+  gusts = true;
   private east = new Vector3();
   private north = new Vector3();
   private up = new Vector3();
@@ -92,7 +94,7 @@ export class WindModel {
     localENU(p, this.east, this.north, this.up);
     this.meanEN(h, this._en);
     let ge = 0, gn = 0, gu = 0;
-    if (gust && dt > 0) {
+    if (gust && dt > 0 && this.gusts) {
       this.stepGust(gust, h, V, dt);
       ge = gust.e; gn = gust.n; gu = gust.u;
     }

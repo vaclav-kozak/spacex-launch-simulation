@@ -71,6 +71,9 @@ const _lgL = new Vector3();
 const _lgE = new Vector3();
 const _lgU = new Vector3();
 const _q1 = new Quaternion();
+const _slU = new Vector3();
+const _slW = new Vector3();
+const _slAero = makeAeroOut();
 const _up = new Vector3();
 const _mp = mp();
 const _mpc = mp();
@@ -85,13 +88,9 @@ function altOf(p: Vector3): number {
   const y = p.y + EARTH_RADIUS;
   return Math.sqrt(p.x * p.x + y * y + p.z * p.z) - EARTH_RADIUS;
 }
-/** reference Earth-relative flight-path elevation (deg) vs mission time for the ascent */
-const GAMMA_REF: [number, number][] = [
-  [0, 90], [10, 89.6], [20, 86.5], [30, 81.5], [40, 75.5], [50, 69.5], [60, 63.5], [70, 58.3], [80, 53.5],
-  [90, 49.2], [100, 45.2], [110, 41.3], [120, 37.5], [130, 34], [140, 30.8], [150, 28], [170, 24],
-];
-function gammaRef(t: number): number {
-  return 90 - (90 - interpTable(GAMMA_REF, t)) * GNC.gammaScale;
+/** reference Earth-relative flight-path elevation (deg) at Earth-relative speed V (GNC.gammaProfile) */
+function gammaRef(V: number): number {
+  return 90 - (90 - interpTable(GNC.gammaProfile, V)) * GNC.gammaScale;
 }
 function interpTable(tab: [number, number][], x: number): number {
   if (x <= tab[0][0]) return tab[0][1];
@@ -272,6 +271,8 @@ export class FlightSim {
   apogeeT = NaN;
   entryStartT = NaN;
   entryEndT = NaN;
+  /** booster altitude at entry-burn ignition (m) */
+  entryAlt = NaN;
   entryDone = false;
   landingStartT = NaN;
   private landingEngines: number[] = [0];
@@ -317,7 +318,9 @@ export class FlightSim {
     for (const id of ALL_IDS) bodies[id] = makeBody(id);
     this.bodies = bodies;
     this.wind = new WindModel(settings.windSpeed, settings.windFromDeg);
-    if (this.presim) this.wind.enabled = false;
+    // the pre-sim flies the day-of-launch mean winds (no gusts): the droneship is stationed where the
+    // booster naturally comes down in today's winds
+    if (this.presim) this.wind.gusts = false;
     this.s1Eng = new EngineSet(M1D, bodies.S1.engines, F9.s1.engineRingRadius, F9.s1.engineAngleDeg);
     this.s2Eng = new EngineSet(MVAC, bodies.S2.engines, 0, () => 0);
     this.fins = new GridFins(bodies.S1.gridFins!.angles);
@@ -772,11 +775,11 @@ export class FlightSim {
       el = 90 - GNC.kickAngleDeg * f;
       // blend from the open-loop kick toward the reference program
       const b = clamp((t - GNC.kickT - GNC.kickDuration) / (GNC.gammaTrackT - GNC.kickT - GNC.kickDuration), 0, 1);
-      el = el * (1 - b) + gammaRef(t) * b;
+      el = el * (1 - b) + gammaRef(rb.vel.length()) * b;
     } else {
       const V = rb.vel.length();
       const gam = Math.asin(clamp(rb.vel.dot(_up) / Math.max(1, V), -1, 1)) / D2R;
-      const ref = gammaRef(t);
+      const ref = gammaRef(V);
       const lim = q > 20_000 ? 1.2 : q > 10_000 ? 2.5 : 5;
       el = gam + clamp(GNC.gammaGain * (ref - gam), -lim, lim);
     }
@@ -804,19 +807,19 @@ export class FlightSim {
 
     // ---- throttle (bucket through max-Q) ----
     if (Number.isNaN(this.mecoT)) {
-      // throttle bucket: q-limiting throttle (72–100 %) through the transonic / max-Q region
-      let thr = 1;
-      if (this.bucket !== 'done' && t > 20) {
-        thr = clamp(1 - GNC.bucketGain * (q - GNC.bucketQ) / GNC.bucketQ, GNC.bucketThrottle, 1);
-        if (this.bucket === 'pre' && thr < 0.97) {
-          this.bucket = 'down';
-          this.ev('THROTTLE_DOWN', 'S1', { q });
-          this.say('lc_throttle_down');
-        } else if (this.bucket === 'down' && thr >= 0.999 && q < this.qPeak * 0.95) {
-          this.bucket = 'done';
-          this.ev('THROTTLE_UP', 'S1', { q });
-          this.say('lc_throttle_up');
-        }
+      // throttle bucket through the transonic / max-Q region: pre-planned throttle profile
+      // (GNC.throttleProfile, mission time → throttle) plus a dynamic-pressure limiter as a safety
+      // net for off-nominal trajectories (thr ≤ 1 − gain·(q − bucketQ)/bucketQ, floor bucketThrottle)
+      let thr = interpTable(GNC.throttleProfile, t);
+      if (t > 20) thr = Math.min(thr, clamp(1 - GNC.bucketGain * (q - GNC.bucketQ) / GNC.bucketQ, GNC.bucketThrottle, 1));
+      if (this.bucket === 'pre' && thr < 0.97) {
+        this.bucket = 'down';
+        this.ev('THROTTLE_DOWN', 'S1', { q });
+        this.say('lc_throttle_down');
+      } else if (this.bucket === 'down' && thr >= 0.999) {
+        this.bucket = 'done';
+        this.ev('THROTTLE_UP', 'S1', { q });
+        this.say('lc_throttle_up');
       }
       this.s1Eng.cmdThrottle = thr;
       // ---- MECO ----
@@ -837,9 +840,7 @@ export class FlightSim {
       this.say('lc_supersonic');
     }
     if (!this.maxQDone) {
-      if (q > this.qPeak) this.qPeak = q;
-      // event time: end of the q plateau (bucket) — last time q was within 1 % of the peak
-      if (q >= this.qPeak * 0.99) this.tPeak = t;
+      if (q > this.qPeak) { this.qPeak = q; this.tPeak = t; }
       else if (v.aero.mach > 1.1 && q < this.qPeak * 0.9) {
         this.maxQDone = true;
         this.ev('MAX_Q', 'S1', { q: this.qPeak, alt: v.alt, mach: v.aero.mach }, this.tPeak);
@@ -951,7 +952,7 @@ export class FlightSim {
     const axisX = _v1.set(1, 0, 0).applyQuaternion(host.rb.quat).clone();
     if (this.presim) {
       this.updateMass(host);
-      this.ev('FAIRING_SEP', 'FAIRING_A', {});
+      this.ev('FAIRING_SEP', 'FAIRING_A', { bodies: ['FAIRING_A', 'FAIRING_B'] });
       if (host.kind === 'UPPER') host.alive = false;
       return;
     }
@@ -973,7 +974,8 @@ export class FlightSim {
       this.payloadDamaged = true;
       this.say('host_payload_damaged', 3);
     }
-    this.ev('FAIRING_SEP', 'FAIRING_A', { manual: this.manualFairing, q, heatFlux, damaged: this.payloadDamaged });
+    // one event for the pair (body kept as FAIRING_A for older consumers)
+    this.ev('FAIRING_SEP', 'FAIRING_A', { bodies: ['FAIRING_A', 'FAIRING_B'], manual: this.manualFairing, q, heatFlux, damaged: this.payloadDamaged });
     this.say('lc_fairing_sep');
     if (!this.payloadDamaged) this.say('host_fairing', 3.5);
   }
@@ -1089,6 +1091,20 @@ export class FlightSim {
       v.rcsMask = MASK_ALL;
       v.rcsDb = 0.25 * D2R;
       v.passive = v.alt > 120_000;
+      if (v.passive) {
+        // coarse coast steps: the cold-gas hold is modelled kinematically (slew ≤ 1.5°/s toward
+        // prograde, body rates nulled) — a PD loop on RCS pulses is not stable at dtCoast
+        const cur = _v3.set(0, 1, 0).applyQuaternion(rb.quat);
+        const ang = Math.acos(clamp(cur.dot(v.axis), -1, 1));
+        const step = Math.min(ang, 1.5 * D2R * dt);
+        if (ang > 1e-6) {
+          const tgt = _v4.copy(cur).lerp(v.axis, step / ang).normalize();
+          _q1.setFromUnitVectors(cur, tgt);
+          rb.quat.premultiply(_q1).normalize();
+        }
+        rb.angVel.set(0, 0, 0);
+        v.rcsMask = MASK_NONE;
+      }
     }
     // automatic fairing jettison also works during coast phases
     if (!burning && this.autoFairing && Number.isNaN(this.fairingSepT) && v.has('FAIRING_A') && !Number.isNaN(this.sesT) && t - this.sesT > GNC.fairingMinDelay) {
@@ -1437,6 +1453,48 @@ export class FlightSim {
     return T1 * 0.9 / (m * 9.81) > 1.25 ? 1 : 3;
   }
 
+  /**
+   * Net side-force slope (N/rad) of tilting the thrust axis by a small angle δ off the relative wind
+   * (engines-first): thrust component T·sinδ plus the aerodynamic side force of the body at AoA δ
+   * (crossflow + grid fins push AWAY from the tilt, the tilted axial drag pushes toward it; the
+   * plume shields part of the axial drag). Negative when aerodynamics dominate (high q): the
+   * engines must then be tilted AWAY from the target, as in the unpowered aero phase.
+   * Also returns the normal force at 3° in `slN3` (for a load limit).
+   */
+  private lateralSlope(v: Vehicle, T: number): number {
+    const V = v.vAir.length();
+    const q = v.aero.q;
+    this.slN3 = 0;
+    if (V < 1 || q < 20) return T;
+    const d = 3 * D2R;
+    _slU.set(V * Math.sin(d), -V * Math.cos(d), 0);
+    const retro = Math.min(1, T / Math.max(1, q * 10.5 * 3));
+    computeAero(SHAPES[v.shape], { finDeploy: this.fins.deploy, retro, legs: this.legs }, _slU, v.atmo.rho, v.atmo.a, v.rb.cg, _slW.set(0, 0, 0), _slAero);
+    this.slN3 = _slAero.normal;
+    const side = _slAero.F.x * Math.cos(d) + _slAero.F.y * Math.sin(d);
+    return (T * Math.sin(d) + side) / d;
+  }
+  private slN3 = 0;
+
+  /**
+   * Tilt the thrust direction `d` so the booster accelerates sideways by `aLat` (W, ⟂ d) as far as
+   * physics allows: tilt = m·|aLat| / slope, clamped to `maxTilt` and to 35 % of the structural
+   * normal-force limit. Returns the achieved lateral acceleration (m/s²).
+   */
+  private divertAxis(v: Vehicle, d: Vector3, aLat: Vector3, T: number, maxTilt: number, out: Vector3): number {
+    out.copy(d);
+    const a = aLat.length();
+    if (a < 1e-4) return 0;
+    const k = this.lateralSlope(v, T);
+    const m = v.rb.mass;
+    let tilt = Math.min(maxTilt, (m * a) / Math.max(1, Math.abs(k)));
+    if (this.slN3 > 1) tilt = Math.min(tilt, 3 * D2R * (0.35 * GNC.boosterNormalLimit) / this.slN3);
+    // smooth sign change around the thrust/aero cross-over (no authority there anyway)
+    const sgn = k / (Math.abs(k) + 0.15 * Math.max(1, T));
+    out.addScaledVector(aLat, (Math.tan(tilt) * sgn) / a).normalize();
+    return (Math.abs(k) * tilt) / m;
+  }
+
   /** horizontal unit direction of motion (W) */
   private alongDir(rb: RigidBody, out: Vector3): Vector3 {
     upOf(rb.pos, _v1);
@@ -1468,6 +1526,7 @@ export class FlightSim {
     const t = this.t;
     this.bPhase = 'ENTRY_BURN';
     this.entryStartT = t;
+    this.entryAlt = this.find('BOOSTER')?.alt ?? NaN;
     this.s1Eng.command(F9.s1.entryBurnEngines, t);
     this.s1Eng.cmdThrottle = 1;
     this.ev('ENTRY_BURN_START', 'S1');
@@ -1537,7 +1596,13 @@ export class FlightSim {
     const ship = this.shipTarget(t);
     // guidance frame: local vertical (the deck normal rocks with the sea state)
     const nUp = _lgN.copy(upOf(rb.pos, _up));
-    const h = this.heightAboveDeck(v, ship);
+    let h = this.heightAboveDeck(v, ship);
+    if (ship && h < 200) {
+      // well off the deck at the end of the burn: the surface below is the sea, not the deck plane
+      const eh = _lgE.copy(ship.pos).sub(v.origin);
+      eh.addScaledVector(nUp, -eh.dot(nUp));
+      if (eh.length() > OCISLY.deckLength * 0.5 + 25) h = altOf(v.origin) - FOOT_DROP;
+    }
     const vRel = _lgV.copy(rb.vel);
     if (ship) vRel.sub(ship.vel);
     const vDown = -vRel.dot(nUp);
@@ -1571,13 +1636,46 @@ export class FlightSim {
         }
         thr = Math.max(M1D.minThrottle, lever);
       }
-      // stick neutral = assisted attitude: retrograde relative to the deck while fast (the burn
-      // cancels the drift like the autopilot's gravity turn), near-vertical when slow; the stick
-      // tilts the thrust up to 14° toward the ship's bow (pitch) / +X side (yaw)
-      const tiltMax = 14 * D2R;
-      acc.copy(nUp).multiplyScalar(Math.max(15, vDown)).addScaledVector(vh, -1).normalize();
-      if (ship) acc.addScaledVector(ship.starboard, Math.tan(tiltMax) * this.manual.yaw).addScaledVector(ship.bow, Math.tan(tiltMax) * this.manual.pitch);
-      acc.normalize();
+      // Assisted attitude (fly-by-wire: the pilot never commands the gimbal directly). Stick = where
+      // the booster should go in the deck frame (pitch+ → bow, yaw+ → starboard/+X).
+      //  * high (> ~200 m above the deck): neutral = lean against the drift relative to the deck
+      //    (retrograde while fast — the burn cancels the drift like the autopilot's gravity turn);
+      //    |stick| = 1 adds 14° of thrust tilt. At high dynamic pressure the body lift of the tilted
+      //    booster outweighs the thrust component, so the assist tilts the engines the other way
+      //    (same physics as the autopilot's divert); near the cross-over the stick has no authority.
+      //  * low: velocity command — |stick| = 1 asks for 8 m/s of drift over the deck, neutral holds
+      //    station over the deck; the assist leans (≤ 20°, ≤ 8° in the last metres) to get there.
+      const lowH = clamp((h - 3) / 60, 0, 1); // 0 at the deck … 1 above ~60 m
+      const wHigh = clamp((h - 150) / 100, 0, 1);
+      const vhL = vh.length();
+      const aL = _lgL.set(0, 0, 0);
+      if (ship) aL.copy(ship.starboard).multiplyScalar(this.manual.yaw).addScaledVector(ship.bow, this.manual.pitch);
+      const sLen = Math.min(1, aL.length());
+      // high-regime axis
+      const leanMax = 35 * D2R;
+      const lean = Math.min(Math.atan2(vhL, Math.max(15, vDown)), leanMax);
+      const dHi = _lgU.copy(nUp);
+      if (vhL > 0.05) dHi.addScaledVector(vh, -Math.tan(lean) / vhL).normalize();
+      if (sLen > 1e-3 && wHigh > 0) {
+        const s2 = _lgE.copy(aL).addScaledVector(dHi, -aL.dot(dHi));
+        const l2 = s2.length();
+        if (l2 > 1e-3) {
+          const T = Math.max(1, this.s1Eng.totalThrust, thr * nEng * M1D.thrustVac * 0.9);
+          const k = this.lateralSlope(v, T);
+          const sgn = k / (Math.abs(k) + 0.15 * T);
+          dHi.addScaledVector(s2, (Math.tan(sLen * 14 * D2R) * sgn) / l2).normalize();
+        }
+      }
+      // low-regime axis: horizontal acceleration toward the commanded drift, produced by leaning
+      const aT = Math.max(3, g + Math.max(0, vDown) * 0.5);
+      const aH = _lgE.copy(aL).multiplyScalar(8 / Math.max(1, aL.length())).sub(vh).multiplyScalar(1 / 1.6);
+      aH.addScaledVector(nUp, -aH.dot(nUp));
+      const tiltLo = (8 + 12 * lowH) * D2R;
+      const aHl = aH.length();
+      const aHmax = aT * Math.tan(tiltLo);
+      if (aHl > aHmax) aH.multiplyScalar(aHmax / aHl);
+      acc.copy(nUp).multiplyScalar(aT).add(aH).normalize();
+      if (wHigh > 0) acc.multiplyScalar(1 - wHigh).addScaledVector(dHi, wHigh).normalize();
       v.axis.copy(acc);
     } else {
       // two-segment vertical profile: constant deceleration to V1 at H1 above the deck, then a
@@ -1601,16 +1699,14 @@ export class FlightSim {
         if (Va > 0.1) d.addScaledVector(v.vAir, -P.w / Va);
         d.normalize();
         const A0 = aVert / Math.max(0.3, d.dot(nUp));
-        acc.copy(d).multiplyScalar(A0);
+        acc.copy(d);
         if (this.ipErrValid && Number.isFinite(this.pred.tdT)) {
+          // lateral correction toward the deck from the predicted impact error; the tilt accounts
+          // for the aerodynamic side force (at high q it outweighs the thrust component)
           const tg = Math.max(3, this.pred.tdT - t);
-          aLat.copy(this.ipErr).addScaledVector(nUp, -this.ipErr.dot(nUp)).multiplyScalar(LP.kIp / (tg * tg));
-          const lim = A0 * Math.tan(LP.ipTiltDeg * D2R);
-          const al = aLat.length();
-          if (al > lim) aLat.multiplyScalar(lim / al);
-          acc.add(aLat);
+          aLat.copy(this.ipErr).addScaledVector(d, -this.ipErr.dot(d)).multiplyScalar(LP.kIp / (tg * tg));
+          this.divertAxis(v, d, aLat, m * A0, LP.ipTiltDeg * D2R, acc);
         }
-        acc.normalize();
       } else {
         // final descent: ZEM/ZEV position hold relative to the (moving) deck, small tilt
         const tg = Math.max(LP.tgMin, (2 * Math.max(0, h - LP.H1)) / Math.max(1, vDown + LP.V1) + 2);
@@ -1668,7 +1764,7 @@ export class FlightSim {
     const N = v.aero.normal;
     const lim = kind === 'STACK' ? GNC.stackNormalLimit : kind === 'BOOSTER' ? GNC.boosterNormalLimit : kind === 'UPPER' ? GNC.upperNormalLimit : Infinity;
     if (N > lim && v.alive) {
-      this.destroy(v, 'aerodynamic breakup');
+      this.destroy(v, this.breakupReason(v), { q: v.aero.q, aoa: this.aoaDeg(v), normal: N });
       return;
     }
     // heating
@@ -1698,7 +1794,32 @@ export class FlightSim {
     }
   }
 
-  private destroy(v: Vehicle, reason: string): void {
+  /** angle between the body axis and the relative wind, either end first (deg) */
+  private aoaDeg(v: Vehicle): number {
+    const a = v.aero.alpha;
+    return Math.min(a, Math.PI - a) / D2R;
+  }
+
+  /** why the normal-force limit was exceeded, in words (RUD reason shown to the viewer) */
+  private breakupReason(v: Vehicle): string {
+    const aoa = this.aoaDeg(v);
+    const qk = (v.aero.q / 1000).toFixed(v.aero.q < 10_000 ? 1 : 0);
+    const who = v.kind === 'BOOSTER' ? 'booster' : v.kind === 'UPPER' ? 'second stage' : 'vehicle';
+    const recentSep = Number.isFinite(this.sepT) && this.t - this.sepT < 20;
+    if (recentSep && v.kind === 'UPPER') {
+      return `second stage separated in thick air (${qk} kPa), pitched ${aoa.toFixed(0)}° off the airflow and broke up`;
+    }
+    if (aoa > 30) {
+      if (v.kind === 'BOOSTER' && this.bPhase === 'FLIP') {
+        return `booster tumbled out of control (cold-gas thrusters too weak for ${Math.round(v.rb.mass / 1000)} t in thick air) and broke up at ${qk} kPa`;
+      }
+      return `${who} tumbling at ${aoa.toFixed(0)}° angle of attack broke up (${qk} kPa)`;
+    }
+    const burning = v.engines && v.engines.activeCount() > 0;
+    return `structural failure: aerodynamic side load at ${qk} kPa, ${aoa.toFixed(0)}° angle of attack${burning ? ' during the burn' : ''}`;
+  }
+
+  private destroy(v: Vehicle, reason: string, extra?: Record<string, unknown>): void {
     if (!v.alive || v.goneAt < Infinity) return;
     for (const m of v.members) {
       const b = this.bodies[m.id];
@@ -1706,7 +1827,7 @@ export class FlightSim {
     }
     if (v.engines) v.engines.command('none', this.t);
     v.rcs?.off();
-    this.ev('RUD', v.root, { reason, members: v.members.map((m) => m.id) });
+    this.ev('RUD', v.root, { reason, members: v.members.map((m) => m.id), ...extra });
     v.goneAt = this.envT + 12;
     v.passive = true;
     v.wrecked = true;
@@ -2097,7 +2218,8 @@ export class FlightSim {
     if (this.bPhase === 'LANDING_BURN') setPred('TOUCHDOWN', this.lastLandingInfo.touchdownT);
     // S2
     if (Number.isNaN(this.secoT)) {
-      if (!Number.isNaN(this.sesT) && this.peg.ok) setPred('SECO', t + this.peg.T);
+      // PEG's time-to-go is measured from its last major cycle (frozen for the last ~8 s)
+      if (!Number.isNaN(this.sesT) && this.peg.ok && this.peg.tUpd >= 0) setPred('SECO', this.peg.tUpd + this.peg.T);
       else if (N.SECO !== undefined) setPred('SECO', N.SECO + shift);
     }
     const seco = Number.isNaN(this.secoT) ? mk('SECO').t : this.secoT;

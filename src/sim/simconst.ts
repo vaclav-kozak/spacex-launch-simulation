@@ -71,16 +71,25 @@ export const GNC = {
   /** from here on the attitude tracks the reference flight-path-angle program (closed loop) */
   gammaTrackT: 22,
   gammaGain: 1.5,
-  /** scales the pitch-over of the reference program (>1 flatter) */
-  gammaScale: 1.0,
+  /** ascent reference program: Earth-relative flight-path elevation (deg) vs Earth-relative speed
+   * (m/s) — a speed-scheduled gravity turn, robust to throttle-profile changes */
+  gammaProfile: [
+    [0, 90], [43, 89.6], [88, 86.5], [145, 81.5], [213, 75.5], [298, 69.5], [382, 63.5], [484, 58.3],
+    [614, 53.5], [776, 49.2], [967, 45.2], [1189, 41.3], [1447, 37.5], [1747, 34], [2099, 30.8], [2400, 28], [2800, 24],
+  ] as [number, number][],
+  /** scales the pitch-over of the reference program (>1 flatter); 1.025 trims the booster apogee to
+   * ~130 km so the entry burn lands at ~T+6:20 */
+  gammaScale: 1.025,
   /** fraction of the wind-induced AoA relieved at high q (0 = none, 1 = fly zero AoA) */
   loadRelief: 0.6,
-  /** throttle bucket: q-limiting law thr = 1 − gain·(q − bucketQ)/bucketQ, clamped to [bucketThrottle, 1] */
-  bucketQ: 30_000,
+  /** planned S1 throttle profile (mission s → throttle): the throttle bucket through max-Q */
+  throttleProfile: [[0, 1], [40, 1], [47, 0.72], [54, 0.72], [64, 1]] as [number, number][],
+  /** q-limiter safety net: thr ≤ 1 − gain·(q − bucketQ)/bucketQ, floor bucketThrottle */
+  bucketQ: 34_000,
   bucketGain: 3,
-  bucketThrottle: 0.74,
-  /** S1 prop remaining at MECO (landing reserve) */
-  mecoReserve: 29_000,
+  bucketThrottle: 0.62,
+  /** S1 prop remaining at MECO (entry + landing burn reserve; ~2 t left at touchdown) */
+  mecoReserve: 26_000,
   sepDelay: 3,
   sesDelay: 7,
   manualSepDelay: 2,
@@ -99,16 +108,16 @@ export const GNC = {
   flipDelay: 4,
   gridfinDelay: 12,
   flipRateDeg: 5,
-  /** entry-burn ignition: dynamic pressure at which the booster lights (Pa) */
-  entryIgnQ: 350,
+  /** entry-burn ignition: dynamic pressure at which the booster lights (Pa) — ~70 km on a 130 km lob */
+  entryIgnQ: 200,
   /** entry-burn cutoff speed window (Earth-relative m/s) */
-  entryVNominal: 1050,
+  entryVNominal: 900,
   entryVMax: 1300,
-  entryVMin: 850,
+  entryVMin: 750,
   /** propellant that must remain after the entry burn (landing burn + margin) */
-  landingReserve: 6_500,
+  landingReserve: 6_000,
   /** landing-burn planning throttle (margin for disturbances) */
-  landingPlanThrottle: 0.8,
+  landingPlanThrottle: 0.72,
   /** light the landing burn when the predicted stop height (at planning throttle) drops below this (m) */
   landingIgnMargin: 0,
   touchdownSpeed: 1.6,

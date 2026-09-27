@@ -30,6 +30,8 @@ export interface SimHistory {
 }
 
 const WARPS = [1, 2, 4, 8, 30, 100];
+/** mission seconds before a key timeline event at which the warp ceiling drops to 1× */
+const KEY_EVENT_LEAD = 5;
 /** max real ms spent stepping per frame (sim falls behind real time beyond this) */
 const FRAME_BUDGET_MS = 28;
 
@@ -59,9 +61,14 @@ interface Nominal {
 
 let nominalCache: { key: string; nom: Nominal } | null = null;
 
+/** Drop the cached nominal pre-sim (tests / tuning tools that change sim constants at runtime). */
+export function resetNominalCache(): void {
+  nominalCache = null;
+}
+
 /** Deterministic nominal pre-simulation (no wind, no ship) to place the droneship. */
 export function runNominal(settings: Settings): Nominal {
-  const key = 'v1';
+  const key = `v2|${settings.windSpeed}|${settings.windFromDeg}`;
   if (nominalCache && nominalCache.key === key) return nominalCache.nom;
   const t0 = now();
   const times: Partial<Record<SimEventType, number>> = {};
@@ -231,14 +238,19 @@ export class Simulation {
 
   private maxWarpNow(): number {
     const c = this.core;
+    const dtNext = c.nextKeyEventT() - c.t;
+    // key events always play at 1× (≥ 4 s of lead even at 8×: one 8× frame covers ≤ 0.8 s)
+    if (dtNext <= KEY_EVENT_LEAD) return 1;
     if (!c.released) return 8;
     if (c.anyBurning()) return 8;
-    let allPassive = true;
-    for (const v of c.vehicles) if (v.alive && !v.kinematic && !v.passive) allPassive = false;
-    const dtNext = c.nextKeyEventT() - c.t;
+    // 100× only while nothing is under active guidance: passive bodies (orbit, parafoils, landed
+    // booster) and ballistic fairing halves (fine steps, but cheap and bounded by FRAME_BUDGET_MS)
+    let quiet = true;
+    for (const v of c.vehicles) if (v.alive && !v.kinematic && !v.passive && v.kind !== 'FAIRING') quiet = false;
     let w = 8;
-    if (dtNext > 30 * 4) w = 30;
-    if (w === 30 && allPassive && dtNext > 100 * 4) w = 100;
+    // step down through 30× (≥ 1.5 s of real time before the 8× band) and 8× before key events
+    if (dtNext > 45) w = 30;
+    if (w === 30 && quiet && dtNext > 150) w = 100;
     return w;
   }
 
