@@ -26,7 +26,11 @@ Extras:
   - Onboard is `view.onboard`; the focus body is `view.focus`.
   - Mode-specific beds: `pad` → pad bed and reverb; `deck` or near the ship → ship bed.
   - On a camera switch (view id, mode or focus change, or a position jump), the mix dips for about 100 ms, then snaps.
-- **Propagation:** sound arrives at retarded time, `c·(t−τ) = |x_L − x_S(τ)|`, solved on a 30 Hz emitter history. Delays equal r/c: 1.1 s at the 380 m pad cam, 5.6 s at the 1.9 km long lens, 23 s at 7.8 km.
+- **Propagation:** sound arrives at retarded time, `c·(t−τ) = |x_L − x_S(τ)|`, solved on a 30 Hz emitter history. Delays equal r/c: 1.1 s at the 380 m pad cam, 2.65 s at the 0.9 km long lens, 23 s at 7.8 km.
+  - **Fixed listeners** (pad, long lens, deck/ship, cinematic flyby and ship_orbit) use air at rest in W. They keep true delay, Mach-cone silence and sonic booms.
+  - **Co-moving listeners** are cameras rigidly following their focus body: `chase`, `orbit`, `onboard_*`, and a `cinematic` move whose velocity is within 20 % of the body's (the dolly). They solve in an air frame moving with the body: an emission at P(τ) sits at P(τ) + v_body·(t − τ). The chase cam therefore hears its vehicle at the real ~100 m range with about 0.3 s delay and no Doppler, thinning with ambient pressure, and there is no Mach-cone dropout. Cinematic licence. Ground booms are skipped for them, and one-shot clunks ride the same frame.
+  - **Chase and orbit above Mach 1** also get up to 45 % of the onboard bed (structure-borne rumble and aero rush, darker), `CHASE_ONBOARD_MIX`.
+  - **Root choice:** the solver takes the most recent root, which is the nearer one when a Mach cone gives two. When no root exists, the oldest-record fallback applies only to a freshly (re)started history, for example after a seek. Once a root has existed, a missing root means silence, never a jump to a km-scale stale emission (`S1_lost` in `debug`).
 - **Pause:** `snap.paused` silences the output and suspends the context.
 - **Stopped clock fallback:** if the mission clock stops advancing for 0.35 s, audio treats it as a pause. This does not apply during a countdown hold (tracked through `snap.countdownHeld` and the `COUNTDOWN_HOLD`/`COUNTDOWN_RESUME` events) or in replay.
 - **Warp:**
@@ -60,8 +64,9 @@ Captures (`tools/audio/capture.py`) are in `shots/audio/r2_*.wav`. Each has a `.
 | Window | Capture | Result |
 |---|---|---|
 | Countdown + ignition, pad cam | `r2_cd_pad` | Callouts strictly sequential, no overlaps. Ignition heard 1.12 s after the event at 381 m (r/c). Peak 0.89, RMS −16 dBFS, no clipping. `lc_2` starts 0.5 s late because `lc_ignition` (1.7 s) is still playing (accepted). |
-| Liftoff, long lens | `r2_lo_long` | Engine arrives about 5.6 s after ignition at 1.9 km (r/c). |
-| Max-Q, chase | `r2_maxq` | `lc_maxq` plays on the event. The sim emits `MAX_Q` about 12.7 s after the real peak (see requests). The chase listener falls 64 → 2460 m behind at T+72 (a camera issue), so the level drops to −44 dB. |
+| Liftoff, long lens (fixed) | `r2_lo_long` | Not co-moving. The rig sits at 7.8 km until T+8.7, then moves to 0.9 km. From then the engine is heard with a 2.65 s delay at 907 m (r/c) and the AGC settles at +14 dB. |
+| Max-Q, S1 chase (co-moving) | `r2_maxq_chase` (seek 60) | r stays 95–104 m, delay 0.32 s, Doppler 1.00–1.01, no lost root. The airborne engine thins from −18.5 dB to −28 dB (ambient pressure) and the AGC makes up +0.4 → +9 dB, so output holds at −13…−16 dBFS with a strong 15–60 Hz band. The onboard bed blends in above Mach 1. `MAX_Q` now arrives 1 s after its peak. The earlier `r2_maxq` (−44 dB at "2460 m") was the retarded-time fallback jumping to a stale emission, not a trailing camera. |
+| Supersonic S1 onboard | `r2_onb_super` | Onboard bed at −12…−14 dBFS. Airborne engine at 58 m in the co-moving frame is −39…−52 dB (forward of the plume, thin air). No clipping. |
 | Stage sep, S1 onboard | `r2_sep_onb` | MECO cuts the structure-borne sound with a chuff, then the stage-sep clunk. S2's MVac is not heard on the S1 onboard cam (correct: vacuum, different body). |
 | Entry burn, S1 onboard | `r2_entry_onb` | Structure-borne `onboardS` 0.60 = 3 engines (2.74 MN). Level −13…−17 dBFS, strong 15–60 Hz. Callouts `lc_entry_start` → `host_entry` → `lc_entry_end` in order with 0.02 s lag. Quiet RCS puffs in the coast before the burn. |
 | Boom → landing burn → touchdown, deck cam | `r2_deck2` | `SONIC_BOOM` at t 480.64 is heard at t 493.17: r 4151 m, delay 12.52 s = r/c, gain 0.82, peak 0.88, no clipping. The landing burn is 1 engine (650 kN), heard 8 s after `LANDING_BURN_START` at 2.7 km, with the camera AGC lifting it (+25 dB → +5 dB). Touchdown thump lands on `TOUCHDOWN`, and `lc_landed` / `host_landed` follow without overlap. |
@@ -78,16 +83,15 @@ Captures (`tools/audio/capture.py`) are in `shots/audio/r2_*.wav`. Each has a `.
 
 ## Requests to other areas
 
-1. **sim:**
-   - `MAX_Q` is emitted when q falls below 0.9 × peak with `t` back-dated to the peak. It therefore arrives about 12.7 s after its own `t`, and so do `lc_maxq` / `host_maxq` (for example, peak at T+1:11, voice at T+1:24). Could the sim emit it at the peak, or have the callout use the emission time?
-   - `lc_holding` is scheduled on mission time, so it never plays during a hold.
-2. **sim (callouts):**
+1. **sim (callouts):**
    - `src/sim/callouts.ts` is the single source of spoken text.
    - After adding or changing a line, run `tools/audio/.venv/bin/python tools/audio/gen_callouts.py`, or ask audio to. An unknown id or text still plays through `speechSynthesis`.
-3. **cameras:**
+   - Round 2 (4b8799d) fixed the earlier `MAX_Q` latency and `lc_holding` requests.
+2. **cameras:**
    - Audio treats `view.onboard === true` as structure-borne listening.
+   - `chase` / `orbit` / `onboard_*` are assumed rigidly attached to `view.focus` (co-moving). A `cinematic` preset counts as co-moving only while it tracks its body's velocity.
    - The OCISLY deck cam is airborne (`onboard: false`) with `mode === 'deck'`, and that is intended.
-   - The S1 chase cam is left kilometres behind at max-Q, which makes it audibly distant (see `r2_maxq`).
+   - The long lens moves from 7.8 km to 0.9 km at about T+8.7. Audio handles it as a position jump (dip, then snap). If the move is intended, fine; at 7.8 km the ignition is heard only at T+20.
 
 ## Housekeeping
 

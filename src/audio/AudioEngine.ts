@@ -40,6 +40,8 @@ const R_NEAR = 30;
 const AGC_TARGET = -17;
 const AGC_MAX = 26;
 const ONBOARD_DB = -19;
+/** share of the onboard bed (structure-borne rumble + aero rush) on chase / orbit cams above Mach ~1.2 */
+const CHASE_ONBOARD_MIX = 0.45;
 const BOOM_DB = -4; // boom peak level at 8 km (dB re full scale before master)
 const ONE_ENGINE_DB = 10 * Math.log10(845_000 / FULL_THRUST);
 
@@ -60,6 +62,10 @@ interface Emitter {
   r: number;
   delay: number;
   lastRcs: [number, number];
+  /** no retarded root although the history once had one: silent, never a km-scale stale emission */
+  lostRoot: boolean;
+  /** history (re)started and no root found yet: the oldest-record fallback is allowed (seek) */
+  freshHist: boolean;
 }
 
 interface PendingShot {
@@ -83,6 +89,10 @@ interface Listener {
   mode: CameraMode | 'none';
   right: THREE.Vector3;
   vel: THREE.Vector3;
+  /** camera rigidly following its focus body (chase / orbit / onboard / dolly): propagation is
+   * solved in an air frame moving with that body (`vf`), see propagation.ts */
+  coMoving: boolean;
+  vf: THREE.Vector3;
 }
 
 const _v = new THREE.Vector3();
@@ -127,6 +137,7 @@ export class AudioEngine {
   // listener state
   private L: Listener = {
     pos: new THREE.Vector3(), alt: 0, onboard: false, body: null, mode: 'none', right: new THREE.Vector3(1, 0, 0), vel: new THREE.Vector3(),
+    coMoving: false, vf: new THREE.Vector3(),
   };
   private lastKey = '';
   private lastPos = new THREE.Vector3();
@@ -144,7 +155,7 @@ export class AudioEngine {
   constructor(private ctx: AppContext) {
     const mk = (id: EmitterId, plume: number): Emitter => ({
       id, hist: new EmitterHistory(16384), plumeOffset: plume, voice: null, rcs: [], rec: new Float64Array(STRIDE),
-      lastNon: -1, lastPopReal: 0, heardDb: -120, propGain: 0, cutoff: 8000, pan: 0, r: 0, delay: 0, lastRcs: [0, 0],
+      lastNon: -1, lastPopReal: 0, heardDb: -120, propGain: 0, cutoff: 8000, pan: 0, r: 0, delay: 0, lastRcs: [0, 0], lostRoot: false, freshHist: true,
     });
     this.emitters = { S1: mk('S1', 15), S2: mk('S2', 4) };
     ctx.events.on('*', (e) => {
@@ -382,6 +393,13 @@ export class AudioEngine {
     this.lastKey = key;
     this.lastPos.copy(Lr.pos);
     this.lastT = snap.t;
+    // co-moving listener: chase / orbit / onboard by mode; a cinematic move when it tracks its body
+    const fb = Lr.body ? snap.bodies[Lr.body] : undefined;
+    if (fb && Lr.mode === 'cinematic') {
+      const vb = fb.vel.length();
+      Lr.coMoving = vb > 30 && _v.copy(Lr.vel).sub(fb.vel).length() < 0.2 * vb;
+    }
+    if (Lr.coMoving && fb) Lr.vf.copy(fb.vel); else { Lr.coMoving = false; Lr.vf.set(0, 0, 0); }
     if (this.snapAt > 0 && now < this.snapAt) return; // hold during the dip
     const snapNow = this.snapAt > 0;
     if (snapNow) { this.snapAt = -1; setP(this.switchGain.gain, 1, now + 0.005, 0.1); }
@@ -428,11 +446,12 @@ export class AudioEngine {
     this.debug.t = snap.t;
     this.debug.agcDb = +this.agcDb.toFixed(1);
     this.debug.listener = key;
+    this.debug.coMoving = Lr.coMoving;
     this.debug.listenerAlt = Math.round(Lr.alt);
   }
 
   private resetTimeline(): void {
-    for (const em of Object.values(this.emitters)) { em.hist.clear(); em.lastNon = -1; }
+    for (const em of Object.values(this.emitters)) { em.hist.clear(); em.lastNon = -1; em.lostRoot = false; em.freshHist = true; }
     this.pending.length = 0;
     this.callouts.clear();
     this.lastRecT = -Infinity;
@@ -446,12 +465,13 @@ export class AudioEngine {
       L.onboard = !!v.onboard;
       L.body = v.focus;
       L.mode = v.mode;
+      L.coMoving = !!v.focus && (L.onboard || v.mode === 'chase' || v.mode === 'orbit' || v.mode === 'onboard_down' || v.mode === 'onboard_engine');
       v.camera.updateMatrixWorld();
       _m.extractRotation(v.camera.matrixWorld);
       L.right.set(_m.elements[0], _m.elements[1], _m.elements[2]).normalize();
     } else {
       L.pos.set(420, PAD_ELEVATION + 3, 380);
-      L.onboard = false; L.body = null; L.mode = 'none';
+      L.onboard = false; L.body = null; L.mode = 'none'; L.coMoving = false;
       L.right.set(1, 0, 0);
     }
     L.alt = altitudeOfXYZ(L.pos.x, L.pos.y, L.pos.z);
@@ -479,8 +499,12 @@ export class AudioEngine {
     const b = snap.bodies[em.id];
     const c = pathSoundSpeed(L.alt, b.altitude);
     const rec = em.rec;
-    const r = em.hist.retarded(snap.t, L.pos, c, rec, this.res);
-    if (r < 0 || rec[H.ALIVE] < 0.5 || b.status === 'gone') {
+    const r = em.hist.retarded(snap.t, L.pos, c, rec, this.res, L.coMoving ? L.vf : null);
+    // no root (listener outside a Mach cone): silent — the oldest-record fallback is only for a
+    // freshly (re)started history, e.g. after a seek, never a jump to a km-scale stale emission
+    if (!this.res.clamped) em.freshHist = false;
+    em.lostRoot = this.res.clamped && !em.freshHist;
+    if (r < 0 || rec[H.ALIVE] < 0.5 || b.status === 'gone' || em.lostRoot) {
       v.src.set(ZERO_NOISE, now, tc, snapParams);
       v.setPropagation(0, 8000, 16000, 16000, 0, now, tc, snapParams);
       em.heardDb = -120; em.propGain = 0; em.lastNon = -1;
@@ -496,8 +520,10 @@ export class AudioEngine {
     const cosT = -(ux * rec[H.AX] + uy * rec[H.AY] + uz * rec[H.AZ]);
     const dirDb = jetDirectivityDb(cosT);
     // Doppler: f' = f (c + v_listener·n) / (c + v_source·n), n = unit listener→source
-    const vs = -(rec[H.VX] * ux + rec[H.VY] * uy + rec[H.VZ] * uz);
-    const vl = -(L.vel.x * ux + L.vel.y * uy + L.vel.z * uz);
+    // (velocities relative to the air frame: the moving frame of a co-moving listener, else W)
+    const vf = L.vf;
+    const vs = -((rec[H.VX] - vf.x) * ux + (rec[H.VY] - vf.y) * uy + (rec[H.VZ] - vf.z) * uz);
+    const vl = -((L.vel.x - vf.x) * ux + (L.vel.y - vf.y) * uy + (L.vel.z - vf.z) * uz);
     const dop = Math.max(0.65, Math.min(1.5, (c + vl) / Math.max(60, c + vs)));
     const T = rec[H.THRUST], non = rec[H.NON], spool = rec[H.SPOOL], thr = rec[H.THROT];
     const srcDb = T > 500 ? 10 * Math.log10(T / FULL_THRUST) : -120;
@@ -545,7 +571,7 @@ export class AudioEngine {
     const d = this.debug, p = em.id;
     d[p + '_r'] = Math.round(r); d[p + '_delay'] = +em.delay.toFixed(2); d[p + '_heardDb'] = +totalDb.toFixed(1);
     d[p + '_cutoff'] = Math.round(cutoff); d[p + '_dop'] = +dop.toFixed(3); d[p + '_clamped'] = this.res.clamped;
-    d[p + '_crackle'] = +np.crackle.toFixed(3); d[p + '_thrust'] = Math.round(T);
+    d[p + '_crackle'] = +np.crackle.toFixed(3); d[p + '_thrust'] = Math.round(T); d[p + '_lost'] = em.lostRoot;
   }
 
   /** bodies mechanically connected to `id` (the stack before separation) */
@@ -560,7 +586,11 @@ export class AudioEngine {
   private updateOnboard(snap: SimSnapshot, now: number, tc: number, snapParams: boolean, pitchMul: number): void {
     const ob = this.onboard!, aero = this.aero!;
     const L = this.L;
-    if (!L.onboard || !L.body || !snap.bodies[L.body]) {
+    // chase / orbit cameras borrow some structure-borne character once supersonic (the airborne
+    // roar thins with ambient pressure; this keeps the vehicle 'felt' at altitude)
+    const fb = L.body ? snap.bodies[L.body] : undefined;
+    const mix = !fb ? 0 : L.onboard ? 1 : L.coMoving ? CHASE_ONBOARD_MIX * smoothstep(0.9, 1.5, fb.mach) : 0;
+    if (mix <= 0.001 || !L.body || !fb) {
       ob.src.set(ZERO_NOISE, now, tc, snapParams);
       setP(ob.gain.gain, 0, now, 0.1);
       setP(aero.gain.gain, 0, now, 0.1);
@@ -581,16 +611,16 @@ export class AudioEngine {
       buffet, whine: T > 1000 ? 0.035 : 0, whineHz: L.body === 'S2' ? 655 : 598, crackSize: 1,
     };
     ob.src.set(np, now, tc, snapParams);
-    setP(ob.lp.frequency, 260 + 520 * Math.min(1, s + qn * 0.3), now, tc);
-    setP(ob.gain.gain, dbToGain(ONBOARD_DB), now, 0.1);
+    setP(ob.lp.frequency, (260 + 520 * Math.min(1, s + qn * 0.3)) * (L.onboard ? 1 : 0.7), now, tc);
+    setP(ob.gain.gain, dbToGain(ONBOARD_DB) * mix, now, 0.1);
     // aerodynamic rush over the camera housing
     const aLvl = 0.55 * Math.pow(qn, 0.6) * (1 + 0.6 * transonic);
     const fc = 280 + 520 * Math.min(2.5, mach);
-    setP(aero.gain.gain, aLvl, now, 0.08);
+    setP(aero.gain.gain, aLvl * mix, now, 0.08);
     setP(aero.bp.frequency, fc, now, 0.2);
     setP(aero.lp.frequency, fc * 3.2, now, 0.2);
     // structure-borne ignition/shutdown transients
-    if (this.lastGroupNon >= 0 && !snapParams && this.realTime - this.lastOnbPop > 0.12) {
+    if (L.onboard && this.lastGroupNon >= 0 && !snapParams && this.realTime - this.lastOnbPop > 0.12) {
       if (non > this.lastGroupNon) { this.lastOnbPop = this.realTime; this.playBuffer(this.buf.pop, ob.input, 0.5, pitchMul); }
       else if (non < this.lastGroupNon) { this.lastOnbPop = this.realTime; this.playBuffer(this.buf.chuff, ob.input, 0.8, pitchMul); }
     }
@@ -754,7 +784,9 @@ export class AudioEngine {
         if (b) this.playBuffer(b, this.structBus, lvl, pitchMul);
         continue;
       }
-      const r = L.pos.distanceTo(p.pos);
+      // co-moving listener: the emission point rides the moving air frame; no ground boom for it
+      if (L.coMoving && p.kind === 'boom') { p.played = true; continue; }
+      const r = L.coMoving ? _v.copy(p.pos).addScaledVector(L.vf, snap.t - p.t).distanceTo(L.pos) : L.pos.distanceTo(p.pos);
       const c = pathSoundSpeed(L.alt, altitudeOfXYZ(p.pos.x, p.pos.y, p.pos.z));
       const arrival = p.t + r / c;
       if (snap.t < arrival) continue;

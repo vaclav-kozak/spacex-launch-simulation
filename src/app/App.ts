@@ -109,6 +109,8 @@ export class App {
       width: window.innerWidth, height: window.innerHeight,
     };
     this.quality = new QualityManager(this.ctx.quality, () => this.ctx.settings.quality);
+    // cameras' overlay div already fades each viewport to black; post fading too would square it
+    PostPipeline.settings.viewAlpha = false;
 
     this.sim = new Simulation(settings, this.ctx.events);
     this.env = new Environment(this.ctx);

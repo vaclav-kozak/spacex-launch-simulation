@@ -97,7 +97,7 @@ The semantics follow `docs/notes/sim.md`.
 **Other events.**
 * `SECO` / `ORBIT` / `PAYLOAD_DEPLOY` set the S2 outcome.
 * `MISSION_END` opens the summary modal 2.5 s later, with the headline from `getSummary().outcome`.
-* Events flagged `seeking` (a burst from `?seek=` or a rebuild), events more than 30 s behind the snapshot, and events during replay update state but are not captioned. The 30 s allowance exists because `MAX_Q` arrives about 12.7 s after its back-dated `t`, and its title must still show.
+* Events flagged `seeking` (a burst from `?seek=` or a rebuild), events more than 30 s behind the snapshot, and events during replay update state but are not captioned. The 30 s allowance is a safety net for late events. Before 4b8799d, `MAX_Q` arrived about 12.7 s after its back-dated `t`, and its title must still show.
 * `FAIRING_SEP` is a single event (`data.bodies = ['FAIRING_A','FAIRING_B']`), so there is one title.
 
 **Backward jumps.** When the mission time jumps backwards by more than 2 s outside replay (a backward seek or an abort recycle), the HUD resets its mission state:
@@ -163,11 +163,6 @@ The semantics follow `docs/notes/sim.md`.
 * `?hud=0` hides the whole layer; input handling still works.
 
 ## Requests
-1. **sim:** `lc_holding` is scheduled on mission time, so it never plays during a hold (the clock is frozen). Please emit it on the hold itself, or on envT.
-2. **sim (manual landing):**
-   * Symptom: the low-altitude lean limit tapers to 8°, and the tip-over threshold is also 8°. Any station-keeping correction in the last metres can therefore turn a soft touchdown into `tipped`.
-   * Where the numbers come from: scripted runs gave `{vHor 6.1, tilt 7.7}` (round 1) and `{vHor 1.4, tilt 8.3}` (round 2), both with a neutral stick.
-   * Ask: could the lean taper below about 4° in the last ~10 m, so that a human has some margin?
-3. **sim:** `MAX_Q` is emitted when q falls below 0.9 × peak, about 12.7 s after the peak it is back-dated to (T+1:11 → T+1:24), so the title and `lc_maxq` come late. Could it be emitted closer to the peak, for example at 0.97 × peak?
-4. **sim (optional):** expose `landing.startsLeft` (manual relights left) and the booster's `propMass` needed for the stop, so the HUD needn't estimate them.
-5. **cameras:** now that the control panel is a small tab, PiPs could move to the top right (below the tab, about y = 60). The captions would then keep their full width. The HUD would work either way.
+1. **sim:** done in 4b8799d: `lc_holding` on the env clock, timely `MAX_Q`, and a tighter manual lean cap near the deck. The HUD's 30 s staleness allowance stays as a safety net.
+2. **sim (optional):** expose `landing.startsLeft` (manual relights left) and the booster's `propMass` needed for the stop, so the HUD needn't estimate them.
+3. **cameras:** now that the control panel is a small tab, PiPs could move to the top right (below the tab, about y = 60). The captions would then keep their full width. The HUD would work either way.

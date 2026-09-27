@@ -3,9 +3,14 @@
 // Every sound-emitting body (S1, S2) records its acoustic source state into a ring buffer each
 // frame (mission time). A listener at x_L hears, at mission time t, the state emitted at the
 // retarded time τ solving  c·(t − τ) = |x_L − x_S(τ)|  (air at rest in W). We take the most recent
-// root (the branch that catches up with the present); a supersonic source approaching the listener
-// has no root until its Mach cone arrives — silence, then the boom — and a camera riding a
-// supersonic vehicle never hears its engines through the air. All of that falls out of the solver.
+// root (the branch that catches up with the present, i.e. the nearer one when a Mach cone gives
+// two); a supersonic source approaching the listener has no root until its Mach cone arrives —
+// silence, then the boom. All of that falls out of the solver.
+//
+// Co-moving listeners (chase / orbit / onboard cameras rigidly following a body) solve in an air
+// frame that moves with that body (`vf`): an emission made at P(τ) sits at P(τ) + vf·(t − τ) at
+// time t. The camera then hears its vehicle at the true ~100 m range with r/c delay and no Mach-cone
+// dropout (cinematic licence: the real air would be at rest in W).
 
 import type { Vector3 } from 'three';
 import type { BodyState } from '../core/types';
@@ -28,6 +33,8 @@ export function bodyAxis(q: { x: number; y: number; z: number; w: number }) {
   _ax.z = 2 * (y * z + w * x);
   return _ax;
 }
+
+export interface Vec3Like { x: number; y: number; z: number }
 
 export class EmitterHistory {
   readonly cap: number;
@@ -80,19 +87,37 @@ export class EmitterHistory {
     if (this.count < this.cap) this.count++;
   }
 
+  /** frame velocity of the current solve (null = air at rest in W) */
+  private vf: Vec3Like | null = null;
+
   /** g(seq) = c·(t − T) − |x_L − P| (≥ 0 → that emission has already reached the listener) */
   private g(seq: number, t: number, L: Vector3, c: number): number {
     const o = (seq % this.cap) * STRIDE, B = this.buf;
-    const dx = L.x - B[o + H.PX], dy = L.y - B[o + H.PY], dz = L.z - B[o + H.PZ];
-    return c * (t - B[o + H.T]) - Math.sqrt(dx * dx + dy * dy + dz * dz);
+    const dt = t - B[o + H.T], vf = this.vf;
+    let dx = L.x - B[o + H.PX], dy = L.y - B[o + H.PY], dz = L.z - B[o + H.PZ];
+    if (vf) { dx -= vf.x * dt; dy -= vf.y * dt; dz -= vf.z * dt; }
+    return c * dt - Math.sqrt(dx * dx + dy * dy + dz * dz);
   }
 
   /**
    * Retarded state for a listener at L, mission time t. Writes the interpolated record into `out`
    * and returns the propagation distance r (m), or -1 if nothing recorded yet. `result.clamped`
    * is true when no root exists inside the history (then the oldest/none state is used).
+   * With a frame velocity `vf` (co-moving listener) the solve runs in that moving air frame and the
+   * returned record's position is the emission point carried along with the frame.
    */
-  retarded(t: number, L: Vector3, c: number, out: Float64Array, result: { clamped: boolean }): number {
+  retarded(t: number, L: Vector3, c: number, out: Float64Array, result: { clamped: boolean }, vf: Vec3Like | null = null): number {
+    this.vf = vf;
+    const r = this.solve(t, L, c, out, result);
+    if (vf && r >= 0) {
+      const dt = t - out[H.T];
+      out[H.PX] += vf.x * dt; out[H.PY] += vf.y * dt; out[H.PZ] += vf.z * dt;
+    }
+    this.vf = null;
+    return r;
+  }
+
+  private solve(t: number, L: Vector3, c: number, out: Float64Array, result: { clamped: boolean }): number {
     result.clamped = false;
     if (!this.count) return -1;
     const first = this.firstSeq, last = this.lastSeq;
@@ -104,7 +129,11 @@ export class EmitterHistory {
       while (h2 - lo > 1) { const m = (lo + h2) >> 1; if (this.at(m, H.T) > t) h2 = m; else lo = m; }
       hi = this.at(lo, H.T) <= t ? lo : first;
     }
-    if (this.g(hi, t, L, c) >= 0) { this.copy(hi, out); return c * (t - out[H.T]); }
+    if (this.g(hi, t, L, c) >= 0) {
+      this.copy(hi, out);
+      const dx = L.x - this.fx(out, t, 0), dy = L.y - this.fx(out, t, 1), dz = L.z - this.fx(out, t, 2);
+      return Math.sqrt(dx * dx + dy * dy + dz * dz);
+    }
     // walk back (coarse, then fine) to the most recent root
     const step = 8;
     let j = hi;
@@ -130,13 +159,19 @@ export class EmitterHistory {
       // record so a seek does not produce minutes of silence; its true distance keeps it quiet.
       result.clamped = true;
       this.copy(first, out);
-      const dx = L.x - out[H.PX], dy = L.y - out[H.PY], dz = L.z - out[H.PZ];
+      const dx = L.x - this.fx(out, t, 0), dy = L.y - this.fx(out, t, 1), dz = L.z - this.fx(out, t, 2);
       // (A supersonic source approaching the listener lands here too; its oldest record is then far
       // away — e.g. the booster's liftoff seen from the droneship — so distance keeps it inaudible.)
       return Math.sqrt(dx * dx + dy * dy + dz * dz);
     }
-    const dx = L.x - out[H.PX], dy = L.y - out[H.PY], dz = L.z - out[H.PZ];
+    const dx = L.x - this.fx(out, t, 0), dy = L.y - this.fx(out, t, 1), dz = L.z - this.fx(out, t, 2);
     return Math.sqrt(dx * dx + dy * dy + dz * dz);
+  }
+
+  /** record position component k (0..2) carried along with the solve's frame to time t */
+  private fx(rec: Float64Array, t: number, k: number): number {
+    const p = rec[H.PX + k], vf = this.vf;
+    return vf ? p + (k === 0 ? vf.x : k === 1 ? vf.y : vf.z) * (t - rec[H.T]) : p;
   }
 
   private copy(seq: number, out: Float64Array): void {
