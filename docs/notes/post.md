@@ -27,12 +27,40 @@ Extras:
 3. `LAYER_VFX` renders into the same target with the depth buffer bound. `ctx.sceneDepth.texture` is
    reset to null afterwards, and `scene.background`, the shadow map and the matrix auto-update are
    suspended for that pass.
-4. Optional DOF, then a 6-level 13-tap bloom (Karis on the first level), a histogram (center-weighted)
-   and 1x1 temporal adaptation.
-5. Screen-space ghosts, then composite: heat haze, long-lens shimmer, camera motion blur, bloom + lens
-   dirt, sun glare/ghosts/star, AgX, sRGB and dither.
-6. SMAA, then the final pass to the canvas: barrel distortion, chromatic aberration, sharpen, look,
-   vignette, grain and `view.alpha`.
+4. Optional DOF, then a 6-level 13-tap bloom (Karis on the first level, soft knee at `bloomKnee` exposed
+   units with a log tail), a 64-bin x 8-row histogram (+ a 65th subject-statistics column) of a ~64 px
+   mip, and 1x1 temporal adaptation (see Exposure).
+5. Screen-space ghosts, then composite: heat haze, long-lens shimmer, camera motion blur, mesopic night
+   look, exposure, local highlight compression, bloom + lens dirt, sun glare/ghosts/star, AgX, sRGB and dither.
+6. SMAA (q1+), then the final pass to the canvas: barrel distortion, chromatic aberration (q1+), sharpen,
+   look, vignette, grain and `view.alpha`.
+
+## Exposure (look-dev pass, settings in `PostSettings.meter` + per camera type in `PostPipeline` METERS)
+Scene-referred units stay physical: twilight sky ~2^-13.5, moon-lit ground ~2^-11 (with env's night gain),
+sunlit white ~2^1, plume-lit smoke at the pad 2^2..2^4.5, plume core 2^6+. Post does all the "camera":
+* **Metering** = weighted mean of the log-luminance histogram between the 40th and 82nd percentile
+  (dark voids and highlights rejected), centre-weighted (`center`), sky weighted `skyW`, geometry near the
+  subject depth weighted `subjW`. Highlight guard: the 97th percentile may sit at most 9 stops over.
+* **Subject constraint** (non-onboard cams): if >1.5..6 % of the central frame is at the subject depth,
+  its mean may sit at most `subjectHeadroom` (1.5) + per-camera `subjHead` stops over the metered level
+  (pad +1, deck +0.5, long lens +1.5). A white sunlit vehicle then lands ~2 stops over mid-grey and a dark
+  background (space, dusk sky) goes dark instead of blowing the vehicle out.
+* **Subject depth** = nearest depth around the frame centre, replaced by the tracked body's distance
+  (`envLook.focusDist`, published by env) when they disagree by >4x (pad cam looking past the tower).
+* **Key compensation:** metered level maps to `key` 0.18 in bright scenes and falls to `keyDark` 0.032
+  for Ln <= -12 (twilight/night stay dark instead of being lifted to grey). At night (`envLook.night`) the
+  key drops up to `nightKeyStops` more (Ln -8..-14), so empty moon-lit skies read dark.
+* **EV clamps** per camera type (`minEV/maxEV` offsets on `minLum/maxLum`; onboard cams give up 3.5 EV earlier).
+* **Adaptation:** exponential (`speedUp` 3.5/s brighter, `speedDown` 1/s darker) with slew limits
+  (24 EV/s stopping down at ignition, 4 EV/s opening up). A camera cut adapts 4x faster for 0.7 s.
+* **Local highlight compression** (`highlightCompress`, `compressStart` 4 stops over key, range 3.5 stops in
+  dark scenes .. 7 in bright): pixels far over the metered level get an exponential shoulder driven by
+  min(own, wide-blur + 0.5) log luminance (blur = bloom up-chain level 2), so a night plume or plume-lit
+  smoke keeps structure without halos, and daylight is untouched.
+* **Night look** (`nightLook` 0.65 x `envLook.night`): dim scene regions (log2 lum -10 .. -4.5) lose colour
+  toward a rod-weighted luminance with a slight blue shift (Purkinje). Flood-/plume-lit areas keep colour.
+* The adaptation texture is per view (split views meter independently); the histogram target is pooled,
+  so `readExposure()` is the per-view debug readout, not the histogram.
 
 ## Contracts for other areas (please read)
 * **`ctx.sceneDepth.resolution` is the pool texture size, not the viewport size** (the pool is shared by
@@ -59,16 +87,19 @@ Extras:
   camera rotation already produces motion blur.
 * Lighting fields used: `sunDir` (sun disc position), `sunColor` + `skyColor` (gray-card exposure prior
   for mostly-black frames like space/night sky), `sunVisibility` (sun glare/star/ghost gate),
-  `exposureBias`.
+  `exposureBias`. From env directly: `envLook` (`src/render/env/look.ts`): `night` (0..1) and
+  `focusDist` (per view id).
 * Lens profiles by `view.mode`: `long_lens` (low vignette, crisp, slight shimmer), `pad`, `onboard_down`,
   `onboard_engine` (strong vignette, barrel distortion, CA, soft, noisy, dirty), `deck` (wide, wet dirt),
   everything else gets the "cine" profile.
 
-## Performance (1080p, RTX 5070 Ti via ANGLE/D3D12; timer queries are noisy on this stack)
-Post costs about 0.5 ms at q0 and 0.8-1.1 ms at q2/q3 for a single view, and about 1.8 ms for 4 split
-views (they share the pool, so the per-view cost scales with pixels). Photo-mode DOF adds about 3 ms.
-A GTX-1650-class GPU is roughly 5-6x slower, so the auto quality (q1 @0.75 scale) should keep post
-around 2-3 ms there.
+## Performance (RTX 5070 Ti via ANGLE/D3D12; timer queries are noisy on this stack)
+GpuTimer 'post' reads 0.4-0.7 ms per view at q2 (1440x832 internal), but most of that is per-pass
+overhead: synced micro-benchmarks give composite ~0.05 ms, histogram + adaptation ~0.006 ms each; a whole
+`render()` with the scene hidden costs ~0.44 ms wall (q2) / ~0.35 ms (q0), CPU-submission bound (~20 passes).
+q0 now skips SMAA (3 full-res passes) and the CA taps, and runs 5 bloom levels, no flares, no motion blur.
+A GTX-1650-class GPU is ~6x slower in fill rate: expect ~1-1.5 ms post at q1/q2 1080p, well under 3 ms.
+Photo-mode DOF adds about 3 ms.
 
 ## Requests
 * **cameras: double fade.** Post blends each view with `view.alpha` (a true cross-dissolve over whatever is

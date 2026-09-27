@@ -20,7 +20,11 @@ export const ATMO = {
   blExt: 7.7e-6,
   blH: 500,
   mieG: 0.78,
-  ozone: [0.65e-6, 1.881e-6, 0.085e-6] as const,
+  // Ozone (Chappuis band) absorption integrated over the sRGB channel responses instead of the usual
+  // single-wavelength values (680/550/440 nm: 0.65/1.881/0.085e-6). The band peaks at ~600 nm, i.e. inside
+  // the red channel, so red is absorbed about as strongly as green. The single-wavelength set turns
+  // every long ozone path magenta (purple twilight zenith, pink grazing sunlight at 30–80 km).
+  ozone: [1.75e-6, 1.7e-6, 0.11e-6] as const,
   ozoneCenter: 25_000,
   ozoneHalfWidth: 15_000,
   groundAlbedo: 0.1,

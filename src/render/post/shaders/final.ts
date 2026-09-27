@@ -34,11 +34,12 @@ void main() {
   float caUv = uLens.y / uOut.y;           // px -> uv-y units
   float s = caUv * (r2 / rc2);
   vec2 dca = dir / max(length(dir * vec2(uAspect, 1.0)), 1e-4) * s;
-  vec3 c;
-  c.r = tex(uvd + dca).r;
   vec3 cg = tex(uvd);
-  c.g = cg.g;
-  c.b = tex(uvd - dca * 0.8).b;
+  vec3 c = cg;
+  if (uLens.y > 0.0) {
+    c.r = tex(uvd + dca).r;
+    c.b = tex(uvd - dca * 0.8).b;
+  }
 
   // sharpen (broadcast) or soften (onboard) with a 4-tap diagonal kernel at source texel scale
   if (abs(uLens.w) > 0.001) {

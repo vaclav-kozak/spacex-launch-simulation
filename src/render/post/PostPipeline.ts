@@ -13,6 +13,7 @@ import * as THREE from 'three';
 import { LAYER_DEFAULT, LAYER_VFX, type AppContext, type ViewInfo } from '../../core/context';
 import { PostShared, BLOOM_LEVELS } from './PostShared';
 import { MAX_HAZE } from './shaders/composite';
+import { envLook } from '../env/look';
 import { postSettings, type PostSettings, type ToneMapper, type DofSettings } from './PostSettings';
 
 interface QualityParams {
@@ -23,12 +24,17 @@ interface QualityParams {
   mbSamples: number;
   flares: boolean;
   maxHaze: number;
+  /** false: no SMAA (3 full-res passes) */
+  smaa: boolean;
+  /** false: single-tap final pass (no lateral CA) */
+  lensCA: boolean;
 }
+// q0 is the "GTX 1650 / laptop" tier: no SMAA, no CA, no flares / motion blur, 5 bloom levels.
 const QUALITY: QualityParams[] = [
-  { msaa: 0, bloomLevels: 5, smaaHi: false, smaaThreshold: 0.12, mbSamples: 0, flares: false, maxHaze: 2 },
-  { msaa: 0, bloomLevels: 6, smaaHi: false, smaaThreshold: 0.1, mbSamples: 0, flares: true, maxHaze: 3 },
-  { msaa: 0, bloomLevels: 6, smaaHi: true, smaaThreshold: 0.1, mbSamples: 6, flares: true, maxHaze: 4 },
-  { msaa: 4, bloomLevels: 6, smaaHi: true, smaaThreshold: 0.08, mbSamples: 10, flares: true, maxHaze: 4 },
+  { msaa: 0, bloomLevels: 5, smaaHi: false, smaaThreshold: 0.12, mbSamples: 0, flares: false, maxHaze: 2, smaa: false, lensCA: false },
+  { msaa: 0, bloomLevels: 6, smaaHi: false, smaaThreshold: 0.1, mbSamples: 0, flares: true, maxHaze: 3, smaa: true, lensCA: true },
+  { msaa: 0, bloomLevels: 6, smaaHi: true, smaaThreshold: 0.1, mbSamples: 6, flares: true, maxHaze: 4, smaa: true, lensCA: true },
+  { msaa: 4, bloomLevels: 6, smaaHi: true, smaaThreshold: 0.08, mbSamples: 10, flares: true, maxHaze: 4, smaa: true, lensCA: true },
 ];
 
 /** Per camera-type "lens + sensor" character. */
@@ -66,6 +72,32 @@ function lensFor(view: ViewInfo): Lens {
   return CINE;
 }
 
+/** Per camera-type metering: sensitivity range (EV clamp relative to the default camera, in stops)
+ * and histogram weights. Broadcast / tracking cameras are big sensors with a lot of gain and a
+ * subject-weighted meter; onboard cameras are small, noisy sensors that give up earlier at night
+ * and meter the whole frame. */
+interface Meter {
+  minEV: number; // stops added to the dark clamp (positive = less sensitive)
+  maxEV: number;
+  skyW: number; // histogram weight of open sky (depth ~ far)
+  subjW: number; // weight of geometry near the subject depth
+  center: number; // centre-weight sharpness (exp(-k r^2))
+  subjHead: number; // extra stops (on top of settings.meter.subjectHeadroom) the subject may run hot
+}
+const METER_DEFAULT: Meter = { minEV: 0, maxEV: 0, skyW: 0.75, subjW: 2.5, center: 9, subjHead: 0 };
+const METERS: Partial<Record<string, Meter>> = {
+  // long lens: small (often plume-dominated) subject on a big sky, let it run hotter so the sky keeps colour
+  long_lens: { minEV: 0, maxEV: 0, skyW: 0.85, subjW: 3, center: 12, subjHead: 1.5 },
+  // pad cams: a flood-lit vehicle on a dark pad is allowed to run brighter (the sky stays visible)
+  pad: { minEV: 0, maxEV: 0, skyW: 0.7, subjW: 2, center: 7, subjHead: 1 },
+  deck: { minEV: 2, maxEV: 0, skyW: 0.8, subjW: 1.5, center: 6, subjHead: 0.5 },
+  onboard_down: { minEV: 3.5, maxEV: 0, skyW: 1, subjW: 1, center: 4, subjHead: 0 },
+  onboard_engine: { minEV: 3.5, maxEV: 0, skyW: 1, subjW: 1, center: 4, subjHead: 0 },
+};
+function meterFor(view: ViewInfo): Meter {
+  return METERS[view.mode] ?? (view.onboard ? METERS.onboard_down! : METER_DEFAULT);
+}
+
 const TONEMAP_ID: Record<ToneMapper, number> = { agx: 0, aces: 1, neutral: 2 };
 const DEBUG_ID: Record<PostSettings['debug'], number> = { none: 0, depth: 1, bloom: 2, exposure: 3, haze: 4, dirt: 5, flare: 6 };
 const SUN_ANG_RADIUS = 0.00465;
@@ -82,6 +114,7 @@ const _clear = new THREE.Color();
 const _res = new THREE.Vector2();
 const _scl = new THREE.Vector2();
 const _maxUv = new THREE.Vector2();
+const _key = new THREE.Vector4();
 
 interface HazeCand { ax: number; ay: number; bx: number; by: number; ra: number; rb: number; za: number; zb: number; s: number; rwa: number; rwb: number; score: number }
 
@@ -256,6 +289,7 @@ export class PostPipeline {
         PostShared.xf(src, sw, sh, u.uSrc.value as THREE.Vector4);
         (u.uTexel.value as THREE.Vector2).set(1 / src.width, 1 / src.height);
         u.uFirst.value = i === 0 ? 1 : 0;
+        u.uKnee.value = set.bloomKnee;
         u.tExp.value = this.exp[this.expRead].texture;
         S.pass(S.m.down, S.down[i], dw, dh);
         dims.push([dw, dh]);
@@ -288,6 +322,9 @@ export class PostPipeline {
     const sun = this.projectSun(view, cam);
 
     // auto-exposure: histogram of a ~64px-wide mip, then 1x1 temporal adaptation
+    const mt = set.meter;
+    const meter = meterFor(view);
+    const keyU = _key.set(Math.log2(mt.keyDark), Math.log2(mt.key), mt.darkLog, mt.brightLog);
     {
       let mi = BLOOM_LEVELS - 1;
       for (let i = 0; i < BLOOM_LEVELS; i++) if (dims[i][0] <= 80) { mi = i; break; }
@@ -295,24 +332,32 @@ export class PostPipeline {
       hu.tSrc.value = S.down[mi].texture;
       (hu.uSize.value as THREE.Vector2).set(dims[mi][0], dims[mi][1]);
       hu.uAspect.value = aspect;
-      S.pass(S.m.hist, S.hist, 64, 8);
+      hu.tDepth.value = S.linDepth.texture;
+      (hu.uDepthX.value as THREE.Vector4).copy(sceneX);
+      hu.tExp.value = this.exp[this.expRead].texture;
+      (hu.uW.value as THREE.Vector4).set(Math.min(cam.far * 0.5, 3e5), meter.skyW, view.onboard ? 1 : meter.subjW, meter.center);
+      S.pass(S.m.hist, S.hist, 65, 8);
 
-      const mt = set.meter;
       const au = S.m.adapt.uniforms;
       au.tHist.value = S.hist.texture;
       au.tPrev.value = this.exp[this.expRead].texture;
       (au.uP.value as THREE.Vector4).set(mt.lowPercent, mt.highPercent, mt.highlightPercent, mt.highlightHeadroom);
       const bias = (ctx.lighting.exposureBias || 0) + set.exposureBias;
-      (au.uClamp.value as THREE.Vector4).set(Math.log2(mt.minLum), Math.log2(mt.maxLum), mt.key, bias);
+      (au.uClamp.value as THREE.Vector4).set(Math.log2(mt.minLum) + meter.minEV, Math.log2(mt.maxLum) + meter.maxEV, 0, bias);
+      (au.uKey.value as THREE.Vector4).copy(keyU);
+      (au.uKeyDeep.value as THREE.Vector3).set(mt.nightKeyStops * envLook.night, mt.darkLog + 4, mt.darkLog - 2);
       const fast = this.fastAdapt > 0 ? 4 : 1;
       (au.uAdapt.value as THREE.Vector4).set(dt, mt.speedUp * fast, mt.speedDown * fast, this.needReset ? 1 : 0);
+      (au.uMaxRate.value as THREE.Vector2).set(mt.maxRateUp * fast, mt.maxRateDown * fast);
+      (au.uSubj.value as THREE.Vector4).set(mt.subjectHeadroom + meter.subjHead, 0.015, 0.06, view.onboard || meter.subjW <= 1 ? 0 : 1);
       // incident-light prior: sun-lit gray card (only used when the frame is mostly black, e.g. space)
       const L = ctx.lighting;
       const sunLum = (0.2126 * L.sunColor.r + 0.7152 * L.sunColor.g + 0.0722 * L.sunColor.b) * L.sunVisibility;
       const skyLum = 0.2126 * L.skyColor.r + 0.7152 * L.skyColor.g + 0.0722 * L.skyColor.b;
       const gray = (0.18 / Math.PI) * (sunLum * 0.75 + skyLum);
-      const priorL = Math.log2(Math.max(1e-6, gray));
-      (au.uPrior.value as THREE.Vector4).set(priorL, mt.priorWeight * Math.min(1, L.sunVisibility * 1.5), Math.log2(1e-3), set.autoExposure ? 0 : 1);
+      const priorL = Math.log2(Math.max(1e-9, gray));
+      // "black" = below anything a sky can be (moonless night sky ~2^-16), i.e. space / unlit void
+      (au.uPrior.value as THREE.Vector4).set(priorL, mt.priorWeight * Math.min(1, L.sunVisibility * 1.5), -17.5, set.autoExposure ? 0 : 1);
       au.uManualL.value = set.manualEV;
       (au.uSun.value as THREE.Vector4).set(sun.uvx, sun.uvy, sun.radius, sun.on ? 1 : 0);
       au.tBloom.value = S.down[0].texture;
@@ -322,6 +367,7 @@ export class PostPipeline {
       au.uSkyDepth.value = Math.min(cam.far * 0.5, 3e5);
       au.uAspect.value = aspect;
       au.uSubjOverride.value = view.onboard ? 60 : 0;
+      au.uSubjHint.value = view.onboard || view.mode === 'deck' ? 0 : (envLook.focusDist.get(view.id) ?? 0);
       this.expRead = 1 - this.expRead;
       S.pass(S.m.adapt, this.exp[this.expRead], 1, 1);
       this.needReset = false;
@@ -388,6 +434,13 @@ export class PostPipeline {
       (u.uSun.value as THREE.Vector4).set((sun.uvx - 0.5) * aspect, sun.uvy - 0.5, sun.on && set.flares ? 1 : 0,
         set.flareStrength * lens.flare * THREE.MathUtils.clamp(ctx.lighting.sunVisibility, 0, 1));
       (u.uSunRot.value as THREE.Vector4).set(lens.starRot, sun.radius, lens.star, 0);
+      // local highlight compression, adaptation level = wide blur from the bloom up-chain
+      const li = Math.min(2, levels - 2);
+      u.tLocal.value = S.up[li].texture;
+      PostShared.xf(S.up[li], dims[li][0], dims[li][1], u.uLocalX.value as THREE.Vector4);
+      (u.uLocal.value as THREE.Vector4).set(set.highlightCompress, set.compressStart, set.compressRangeDark, set.compressRangeBright);
+      (u.uKey.value as THREE.Vector4).copy(keyU);
+      (u.uNight.value as THREE.Vector4).set(set.nightLook * envLook.night, -10, -4.5, 0.5);
       u.uTonemap.value = TONEMAP_ID[set.toneMapper] ?? 0;
       (u.uLook.value as THREE.Vector3).set(set.agxLook.slope, set.agxLook.power, set.agxLook.saturation);
       u.uDebug.value = DEBUG_ID[set.debug] ?? 0;
@@ -397,7 +450,7 @@ export class PostPipeline {
     if (PostPipeline.profileDetail) { prof?.end(); prof?.begin('smaa'); }
     // ---------------------------------------------------------------- SMAA
     let finalSrc = S.ldr;
-    if (S.smaaReady >= 2) {
+    if (Q.smaa && S.smaaReady >= 2) {
       const res = _res.set(1 / S.W, 1 / S.H);
       const scl = _scl.set(w / S.W, h / S.H);
       const maxUv = _maxUv.set((w - 0.5) / S.W, (h - 0.5) / S.H);
@@ -446,7 +499,7 @@ export class PostPipeline {
       const sharpen = lens.sharpen + (lens.sharpen > -0.05 ? (1 - up) * 0.6 : 0);
       (u.uLens.value as THREE.Vector4).set(
         lens.vignette * set.vignette,
-        lens.ca * set.chromaticAberration * (outH / 1080),
+        Q.lensCA ? lens.ca * set.chromaticAberration * (outH / 1080) : 0,
         set.lensDistortion ? lens.barrel : 0,
         sharpen,
       );

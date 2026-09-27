@@ -18,6 +18,7 @@ import { EarthSurface, MAX_PLUME_LIGHTS, type EarthTextures } from './earth';
 import { EnvProbe } from './envprobe';
 import { Terrain } from './terrain';
 import { Clouds } from './clouds';
+import { envLook } from './look';
 
 const D2R = Math.PI / 180;
 /** artistic gain of everything lit by the night sky (moon, stars, airglow, city lights) so a
@@ -243,6 +244,7 @@ export class Environment implements FrameModule {
     // global night gain from the sun elevation at the pad (pad up = +Y)
     const sunEl = Math.asin(THREE.MathUtils.clamp(e.sunDir.y, -1, 1)) / D2R;
     this.nightGain = 1 + (NIGHT_GAIN - 1) * smooth(-10, -18, sunEl);
+    envLook.night = (this.nightGain - 1) / (NIGHT_GAIN - 1);
     this.moonE = ATMO.sunE * MOON_SUN_RATIO * Math.pow(e.moonIllum, 3) * this.nightGain;
 
     // ocean detail (only needed when some camera is near the sea)
@@ -274,6 +276,8 @@ export class Environment implements FrameModule {
 
   beforeViewRender(view: ViewInfo, snap: SimSnapshot): void {
     const ctx = this.ctx;
+    const fb = view.focus ? snap.bodies[view.focus] : undefined;
+    envLook.focusDist.set(view.id, fb ? view.camWorldPos.distanceTo(fb.pos) : 0);
     const r = ctx.renderer;
     const q = ctx.quality.level;
     const cam = view.camera;

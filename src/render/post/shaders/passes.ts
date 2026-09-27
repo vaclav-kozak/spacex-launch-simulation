@@ -31,6 +31,7 @@ uniform vec4 uSrc;
 uniform vec2 uTexel;
 uniform float uFirst;
 uniform float uKaris;
+uniform float uKnee;   // exposed luminance where the bloom source starts to saturate
 uniform sampler2D tExp;
 varying vec2 vUv;
 vec3 S(vec2 uv) { return texture2D(tSrc, min(uv, uSrc.zw)).rgb; }
@@ -38,9 +39,11 @@ vec3 clean(vec3 c, float e) {
   if (any(isnan(c)) || any(isinf(c))) return vec3(0.0);
   c = max(c, vec3(0.0));
   float l = luma(c) * e;
-  // soft clamp: pixels far above white are compressed so single-pixel glints can't flicker the bloom
-  const float K = 800.0;
-  return l > K ? c * (K + log2(l / K) * K * 0.25) / l : c;
+  // sensor-like saturation of the bloom source: a plume 15+ stops over the metered level (night,
+  // twilight) would otherwise flood the whole frame with glow. Log tail keeps some growth with
+  // brightness so hotter sources still glow wider.
+  float K = uKnee;
+  return l > K ? c * (K + log2(l / K) * K * 0.3) / l : c;
 }
 float kw(vec3 c, float e) { return 1.0 / (1.0 + luma(c) * e * 0.25); }
 void main() {
@@ -106,7 +109,10 @@ void main() {
 }
 `;
 
-/** Luminance histogram: 64 bins (x) x 8 row-stripes (y). Center-weighted. */
+/** Luminance histogram: 64 bins (x) x 8 row-stripes (y). Center-weighted and subject-aware: open sky
+ * counts less, geometry near the subject depth (previous frame's centre depth) counts more.
+ * Column 64 holds the subject statistics instead: r = sum(w * log2 lum), g = sum(w) over central
+ * pixels at the subject depth, b = sum(w) over all pixels. */
 export const HIST_FRAG = /* glsl */ `
 ${COMMON}
 uniform sampler2D tSrc;
@@ -114,29 +120,57 @@ uniform ivec2 uSize;
 uniform float uAspect;
 uniform float uMinLog;
 uniform float uLogRange;
+uniform sampler2D tDepth;
+uniform vec4 uDepthX;
+uniform sampler2D tExp;
+uniform vec4 uW;      // sky depth (m), sky weight, subject weight, centre weight sharpness
 void main() {
   int bin = int(gl_FragCoord.x);
   int row = int(gl_FragCoord.y);
-  float acc = 0.0;
+  float subj = texelFetch(tExp, ivec2(0), 0).a;
+  subj = (subj > 0.0 && subj < 1e20) ? subj : 1e30;
+  vec3 acc = vec3(0.0);
   vec2 inv = 1.0 / vec2(uSize);
+  bool stats = bin == 64;
   for (int y = row; y < uSize.y; y += 8) {
     for (int x = 0; x < uSize.x; x++) {
       vec3 c = texelFetch(tSrc, ivec2(x, y), 0).rgb;
-      float lg = log2(max(luma(c), 1e-9));
+      float lg = clamp(log2(max(luma(c), 1e-12)), uMinLog, uMinLog + uLogRange);
       int b = int(clamp((lg - uMinLog) / uLogRange, 0.0, 0.99999) * 64.0);
-      if (b == bin) {
-        vec2 p = (vec2(float(x), float(y)) + 0.5) * inv - 0.5;
+      if (b == bin || stats) {
+        vec2 uv = (vec2(float(x), float(y)) + 0.5) * inv;
+        vec2 p = uv - 0.5;
         p.x *= uAspect;
-        acc += 0.3 + exp(-dot(p, p) * 9.0);
+        float r2 = dot(p, p);
+        float w = 0.3 + exp(-r2 * uW.w);
+        float d = texture2D(tDepth, rgn(uv, uDepthX)).r;
+        bool sky = d > uW.x;
+        bool near = !sky && d > subj * 0.4 && d < subj * 2.5;
+        if (stats) {
+          acc.b += w;
+          if (near && r2 < 0.16) { acc.r += w * lg; acc.g += w; }
+        } else {
+          if (sky) w *= uW.y;
+          else if (near) w *= uW.z;
+          acc.r += w;
+        }
       }
     }
   }
-  gl_FragColor = vec4(acc, 0.0, 0.0, 1.0);
+  gl_FragColor = vec4(acc, 1.0);
 }
 `;
 
 /** Exposure adaptation (1x1). out: r = adapted log2 luminance, g = exposure multiplier,
- * b = measured sun luminance (scene-referred, occlusion-aware), a = subject depth (m). */
+ * b = measured sun luminance (scene-referred, occlusion-aware), a = subject depth (m).
+ *
+ * Metering: weighted mean log luminance of the [lowP, highP] percentile window of the (centre /
+ * subject weighted) histogram, so small hot sources (a distant plume, lamps, the sun) are ignored.
+ * A highlight percentile may sit at most `headroom` stops above that before it pulls exposure down
+ * (large bright areas, e.g. a frame full of plume-lit smoke). Mostly black frames (space) blend
+ * toward an incident-light prior. The target is clamped per camera type, adapted with separate
+ * speeds + a slew limit (EV/s), and the key (display value of the metered level) drops for dark
+ * scenes so twilight/night read as such instead of being pushed to daylight mid-grey. */
 export const ADAPT_FRAG = /* glsl */ `
 ${COMMON}
 uniform sampler2D tHist;
@@ -144,8 +178,13 @@ uniform sampler2D tPrev;
 uniform float uMinLog;
 uniform float uLogRange;
 uniform vec4 uP;      // lowP, highP, hiP, hiHeadroom
-uniform vec4 uClamp;  // minL, maxL, key, biasEV
+uniform vec4 uClamp;  // minL, maxL, _, biasEV
+uniform vec4 uKey;    // log2 key dark, log2 key bright, Ln where dark ends, Ln where bright starts
+uniform vec3 uKeyDeep; // extra stops below the dark key (night), Ln where it starts, Ln where it is full
 uniform vec4 uAdapt;  // dt, speedUp, speedDown, reset
+uniform vec2 uMaxRate;  // EV/s slew limit (scene brighter, scene darker)
+uniform vec4 uSubj;   // subject headroom (stops over the metered level), min / full coverage share, on
+uniform float uSubjHint; // distance to the tracked body (m, from env), 0 = unknown
 uniform vec4 uPrior;  // priorL, priorW, blackLog, manual(>0.5)
 uniform float uManualL;
 uniform vec4 uSun;    // uv.xy, radius (uv-y), onScreen
@@ -190,6 +229,15 @@ void main() {
     }
     float avgL = sumW > 0.0 ? sumL / sumW : uClamp.x;
     L = max(avgL, hiLog - uP.w);
+    // subject: a tracked, sun- or flood-lit vehicle may sit at most uSubj.x stops over the metered
+    // level (a camera operator exposes for the subject; the dark background goes darker)
+    vec3 st = vec3(0.0);
+    for (int r = 0; r < 8; r++) st += texelFetch(tHist, ivec2(64, r), 0).rgb;
+    if (uSubj.w > 0.5 && st.g > 0.0 && st.b > 0.0) {
+      float share = st.g / st.b;
+      float Ls = st.r / st.g;
+      L = mix(L, max(L, Ls - uSubj.x), smoothstep(uSubj.y, uSubj.z, share));
+    }
     float blackFrac = black / total;
     float pw = uPrior.y * smoothstep(0.35, 0.85, blackFrac);
     L = mix(L, max(L, uPrior.x), pw);
@@ -205,9 +253,14 @@ void main() {
     Ln = L;
   } else {
     float rate = L > prev ? uAdapt.y : uAdapt.z;
-    Ln = prev + (L - prev) * (1.0 - exp(-uAdapt.x * rate));
+    float step = (L - prev) * (1.0 - exp(-uAdapt.x * rate));
+    float maxStep = (L > prev ? uMaxRate.x : uMaxRate.y) * uAdapt.x;
+    Ln = prev + clamp(step, -maxStep, maxStep);
   }
-  float exposure = uClamp.z / exp2(Ln) * exp2(uClamp.w);
+  // key: display level of the metered luminance, lower in dark scenes (twilight / night look)
+  float keyL = mix(uKey.x, uKey.y, smoothstep(uKey.z, uKey.w, Ln));
+  keyL -= uKeyDeep.x * (1.0 - smoothstep(uKeyDeep.z, uKeyDeep.y, Ln)); // y > z; ordered edges
+  float exposure = exp2(keyL - Ln + uClamp.w);
 
   // sun: luminance at the disc (half-res bloom mip 0) x fraction of unoccluded depth taps
   float sunLum = 0.0;
@@ -230,6 +283,9 @@ void main() {
     vec2 p = vec2(0.4 + 0.05 * float(x), 0.4 + 0.05 * float(y));
     subj = min(subj, texture2D(tDepth, rgn(p, uDepthX)).r);
   }
+  // a fixed camera looking past foreground structure (pad cam, tower in the middle) or a tracked
+  // body far off-centre: trust the tracked body's distance instead
+  if (uSubjHint > 0.0 && (subj < uSubjHint * 0.25 || subj > uSubjHint * 4.0)) subj = uSubjHint;
   if (uSubjOverride > 0.0) subj = min(subj, uSubjOverride);
   gl_FragColor = vec4(Ln, exposure, sunLum, subj);
 }

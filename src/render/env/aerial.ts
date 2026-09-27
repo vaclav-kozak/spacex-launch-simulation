@@ -18,12 +18,15 @@
 // Extra helpers in AERIAL_GLSL: aerialLookup(rel, out inscat, out trans) (one fetch for both),
 // aerialSunColor() (direct sun/moon irradiance at the camera, linear), aerialSunDir,
 // aerialCloudShadow(rel) (0..1 transmittance of the volumetric clouds toward the key light at the
-// fragment; 1 outside the per-view cloud shadow map). Patched lit materials apply the cloud
-// shadow to their directional lights automatically.
+// fragment; 1 outside the per-view cloud shadow map), aerialEarthShadow(rel, lightDirW) /
+// aerialSunVisibility(rel) (0..1 Earth shadow at the fragment). Patched lit materials apply both
+// to their directional lights automatically; custom shaders lit by aerialSunColor() should multiply
+// by aerialSunVisibility(rel) (smoke on the ground while the focus is sunlit high up).
 
 import * as THREE from 'three';
 import { AERIAL_LOOKUP_GLSL } from './atmosphere';
 import { CLOUD_SHELL } from './cloudWeather';
+import { EARTH_RADIUS } from '../../core/constants';
 
 export const aerialUniforms = {
   // LUT (owned/filled by env; the texture objects are swapped in at init)
@@ -77,6 +80,19 @@ float aerialCloudShadow(vec3 rel) {
   float f = clamp((s.z - h) / max(s.z - s.y, 1.0), 0.0, 1.0);
   return mix(1.0, pow(clamp(s.x, 1e-6, 1.0), f), smoothstep(0.0, 0.04, edge));
 }
+// Earth shadow toward a light (W unit direction) at the fragment: 0 below the horizon raised by
+// the opaque lower atmosphere (+12 km, as core/frames sunVisibility), 1 above, ~1 degree soft.
+// The key light is colored for the view's focus body; this keeps a pad in the Earth's shadow dark
+// while the tracked rocket 70 km up is sunlit (pad cam at twilight).
+float aerialEarthShadow(vec3 rel, vec3 L) {
+  vec3 p = uAerialCamUp * (${EARTH_RADIUS.toFixed(1)} + uAerialCamAlt) + rel;
+  float r = length(p);
+  float zen = acos(clamp(dot(p, L) / r, -1.0, 1.0));
+  const float Reff = ${(EARTH_RADIUS + 12000).toFixed(1)};
+  float dip = r > Reff ? acos(Reff / r) : 0.0;
+  return clamp((1.5707963 + dip - zen) / 0.0188 + 0.5, 0.0, 1.0);
+}
+float aerialSunVisibility(vec3 rel) { return aerialEarthShadow(rel, uAerialSunDir); }
 #endif
 `;
 
@@ -134,7 +150,7 @@ export function patchMaterial(mat: THREE.Material): void {
       // volumetric cloud shadows on the directional (sun/moon) lights
       fs = fs.replace(
         '#include <lights_fragment_begin>',
-        'float aerialCloudSh = aerialCloudShadow(vAerialRel);\n' + chunk.replace(DIR_LIGHT_LINE, DIR_LIGHT_LINE + '\n\t\tdirectLight.color *= aerialCloudSh;'),
+        'float aerialCloudSh = aerialCloudShadow(vAerialRel);\n' + chunk.replace(DIR_LIGHT_LINE, DIR_LIGHT_LINE + '\n\t\tdirectLight.color *= aerialCloudSh * aerialEarthShadow(vAerialRel, normalize((vec4(directionalLight.direction, 0.0) * viewMatrix).xyz));'),
       );
     }
     shader.fragmentShader = fs
@@ -146,7 +162,7 @@ export function patchMaterial(mat: THREE.Material): void {
       );
   };
   m.customProgramCacheKey = function () {
-    return (prevKey ? prevKey.call(this) : '') + (additive ? '|aerialA2' : '|aerial2');
+    return (prevKey ? prevKey.call(this) : '') + (additive ? '|aerialA3' : '|aerial3');
   };
   m.needsUpdate = true;
 }

@@ -36,6 +36,28 @@ focus body), `fillLight`, `hemi` (used only until the first env probe exists), `
   (Standard/Physical/Lambert/Phong/Toon) apply it to all directional lights automatically. Custom shaders
   lit by `aerialSunColor()` should multiply by `aerialCloudShadow(rel)` for smoke or plumes below or inside the deck.
 
+* **New (look-dev):** `float aerialEarthShadow(vec3 rel, vec3 lightDirW)` / `aerialSunVisibility(rel)`: 0..1
+  Earth shadow at the fragment (horizon raised by 12 km like `core/frames` sunVisibility, ~1 deg soft).
+  The key light is colored for the view's focus body, so without this a pad camera at twilight lit the
+  whole pad with the sun the rocket sees at 70 km. Patched lit materials apply it per directional light
+  automatically. **vfx:** smoke/plume shaders lit by `aerialSunColor()` should multiply by
+  `aerialSunVisibility(rel)` (pad smoke / low exhaust while the focus is sunlit high up).
+
+## Look values for post (`look.ts`)
+`envLook.night` (0 day/twilight .. 1 night, same ramp as the moon/star night gain) and
+`envLook.focusDist` (Map view id -> camera-to-focus-body distance, m, written in beforeViewRender).
+Only post reads them.
+
+## Sky / time of day (look-dev)
+* Twilight epoch is `2026-12-23T01:24:00Z`: sun -6.0 deg at az 246 (end of civil twilight). The pad is in
+  the Earth's shadow; the rocket climbs into sunlight at ~45-50 km (twilight "jellyfish"); a nearly full
+  moon rises in the ENE.
+* Ozone absorption is channel-integrated (`ozone [1.75, 1.7, 0.11] e-6`, was single-wavelength
+  0.65/1.88/0.085): the Chappuis band covers the whole red and green sRGB bands, so red is absorbed
+  about as much as green. The old values made long ozone paths magenta (purple twilight sky, pink
+  booster at 75 km); now the twilight sky is blue overhead with an orange western horizon and grazing
+  sunlight goes orange (tangent 12-16 km) -> white/lavender (25-35 km) -> white.
+
 ## Clouds (`clouds.ts`, `cloudWeather.ts`)
 * Volumetric clouds are a coastal marine stratocumulus deck, roughly 0.6–1.5 km thick near the coast.
   The deck burns off a few km inland and breaks up offshore, and scattered cumulus (tops up to ~3.4 km)
@@ -62,6 +84,9 @@ focus body), `fillLight`, `hemi` (used only until the first env probe exists), `
   docs/assets/env.md, `coast` step).
 
 ## Known issues / requests
+* City lights (`earth_night_reg.jpg`, 2048² over 24x24 deg = 1.3 km/px from the 3 km Black Marble) read as
+  a smooth golden glow from altitude (LA basin at T+150 night looks like sunlit cloud). A 500 m Black
+  Marble crop of the SoCal coast would fix it (asset task).
 * App: `THREE.WebGLShadowMap: PCFSoftShadowMap has been removed` warning. This comes from `renderer.shadowMap.type` in
   App.ts (not env). Use `THREE.PCFShadowMap` (soft filtering is the default in r18x) to silence it.
 * The cloud transmittance in `ctx.lighting.sunColor` is 1–2 frames late (async readback).

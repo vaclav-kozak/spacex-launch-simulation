@@ -10,15 +10,16 @@ const D2R = Math.PI / 180;
 /**
  * Launch epochs (UTC) for T-0 per time-of-day preset at SLC-4E. Chosen so that:
  *  morning : sun 15° up in the ESE (az 112°)                                   08:29 PDT
- *  twilight: 33 min after sunset, sun -7.1° in the WSW (az 246°) -> the rocket climbs
- *            into sunlight around 50–60 km ("jellyfish")                           17:30 PST
+ *  twilight: end of civil twilight, sun -6.0° in the WSW (az 246°): deep-blue sky with a warm
+ *            western glow at the pad; the rocket climbs into sunlight around 45–50 km
+ *            ("jellyfish"); nearly full moon rising in the ENE                      17:24 PST
  *  night   : sun -36°, full moon 35° up in the SSE (az 161°, along the launch azimuth
  *            -> moon glitter path on the sea downrange)                           23:30 PDT
  * (dates verified with this ephemeris; see envDebug in the test page)
  */
 export const TOD_EPOCHS: Record<TimeOfDay, string> = {
   morning: '2026-10-15T15:29:00Z',
-  twilight: '2026-12-23T01:30:00Z',
+  twilight: '2026-12-23T01:24:00Z',
   night: '2026-05-01T06:30:00Z',
 };
 

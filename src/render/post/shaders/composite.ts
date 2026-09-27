@@ -104,6 +104,11 @@ uniform vec4 uProj;         // P00, P11, P20(=elements[8]), P21(=elements[9])
 uniform float uSubjOverride;
 uniform vec4 uSun;          // pos (aspect-centered).xy, on, strength
 uniform vec4 uSunRot;       // starburst rotation, sun radius (uv-y), _, _
+uniform sampler2D tLocal;   // wide blurred HDR (bloom up-chain level) = local adaptation level
+uniform vec4 uLocalX;
+uniform vec4 uLocal;        // strength (0 = off), start (stops over key), range dark, range bright (stops)
+uniform vec4 uKey;          // same as the adapt pass: log2 key dark/bright, Ln dark/bright
+uniform vec4 uNight;        // mesopic look: strength (0 = off), log2 scene lum fully scotopic, log2 lum photopic, blue shift
 uniform int uTonemap;       // 0 agx, 1 aces, 2 neutral
 uniform vec3 uLook;
 uniform int uDebug;
@@ -247,8 +252,35 @@ void main() {
 
   vec3 bloom = texture2D(tBloom, rgn(uv, uBloomX)).rgb;
   vec3 dirt = texture2D(tDirt, uv * uDirtX.xy + uDirtX.zw).rgb;
-  col = mix(col, bloom, uBloom.x) + bloom * dirt * uBloom.y;
+  // mesopic / scotopic vision at night: dim (moon-lit) regions lose colour toward the rod response
+  // (Purkinje: blue-greens stay, reds sink) with a slight blue cast. Driven by scene luminance, so
+  // flood-lit and plume-lit areas keep their colour. Env scales uNight.x with the night factor.
+  if (uNight.x > 0.0) {
+    float ls = log2(max(luma(col), 1e-20));
+    float m = uNight.x * (1.0 - smoothstep(uNight.y, uNight.z, ls)); // edges ordered (GLSL: e0 >= e1 undefined)
+    float rod = dot(col, vec3(0.05, 0.55, 0.40));
+    vec3 tint = mix(vec3(1.0), vec3(0.80, 0.93, 1.25), uNight.w);
+    tint /= dot(tint, vec3(0.2126, 0.7152, 0.0722));
+    col = mix(col, rod * tint, m);
+  }
   col *= exposure;
+  // local highlight compression ("camera knee" + local adaptation): regions far above the metered
+  // level (a night / twilight plume, plume-lit smoke) are pulled down with an exponential shoulder
+  // that saturates at "range" stops over the start point. The compression amount comes from
+  // min(own, local average), so detail inside bright regions is kept (slope 1 where a pixel is
+  // brighter than its surroundings) and dark pixels next to bright ones are untouched (no halos).
+  if (uLocal.x > 0.0) {
+    float keyL = log2(max(exposure, 1e-30)) + E.r;       // log2 display level of the metered lum
+    float day = smoothstep(uKey.x, uKey.y, keyL);
+    float start = keyL + uLocal.y;
+    float R = mix(uLocal.z, uLocal.w, day);
+    float yo = log2(max(luma(col), 1e-12));
+    float yb = log2(max(luma(texture2D(tLocal, rgn(uv, uLocalX)).rgb) * exposure, 1e-12));
+    float ex = max(min(yo, yb + 0.5) - start, 0.0);
+    float off = (R * (1.0 - exp(-ex / R)) - ex) * uLocal.x;
+    col *= exp2(off);
+  }
+  col = mix(col, bloom * exposure, uBloom.x) + bloom * exposure * dirt * uBloom.y;
   if (uBloom.z > 0.5) {
     vec3 fl = texture2D(tFlare, rgn(uv, uFlareX)).rgb * uBloom.w;
     col += fl * (0.6 + dirt * 3.0);

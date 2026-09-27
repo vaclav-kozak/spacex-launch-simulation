@@ -15,6 +15,9 @@ import {
 } from './shaders/smaa';
 
 export const BLOOM_LEVELS = 6;
+/** exposure histogram range (log2 scene luminance): moonless night sky .. sun-lit plume */
+export const HIST_MIN_LOG = -20;
+export const HIST_LOG_RANGE = 32;
 
 export interface Surf { rt: THREE.WebGLRenderTarget; w: number; h: number }
 
@@ -91,7 +94,7 @@ export class PostShared {
     this.quad = new THREE.Mesh(g);
     this.quad.frustumCulled = false;
 
-    this.hist = target(64, 8, { type: THREE.FloatType, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
+    this.hist = target(65, 8, { type: THREE.FloatType, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
     this.dirt = target(1024, 1024, {
       type: THREE.UnsignedByteType, generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter,
     });
@@ -99,13 +102,17 @@ export class PostShared {
     const smaaW = { tDiffuse: t(), tArea: { value: this.areaTex }, tSearch: { value: this.searchTex }, resolution: v2(), uScale: v2() };
     this.m = {
       depth: mat(LINEAR_DEPTH_FRAG, { tDepth: t(), uLogFar: f(), uNearFar: v2(), uLogDepth: f(1) }),
-      down: mat(BLOOM_DOWN_FRAG, { tSrc: t(), uSrc: v4(), uTexel: v2(), uFirst: f(), uKaris: f(0.35), tExp: t() }),
+      down: mat(BLOOM_DOWN_FRAG, { tSrc: t(), uSrc: v4(), uTexel: v2(), uFirst: f(), uKaris: f(0.35), uKnee: f(64), tExp: t() }),
       up: mat(BLOOM_UP_FRAG, { tLow: t(), uLow: v4(), uLowTexel: v2(), tCur: t(), uCur: v4(), uScatter: f(0.6), uRadius: f(1) }),
-      hist: mat(HIST_FRAG, { tSrc: t(), uSize: { value: new THREE.Vector2() }, uAspect: f(1), uMinLog: f(-16), uLogRange: f(28) }),
+      hist: mat(HIST_FRAG, {
+        tSrc: t(), uSize: { value: new THREE.Vector2() }, uAspect: f(1), uMinLog: f(HIST_MIN_LOG), uLogRange: f(HIST_LOG_RANGE),
+        tDepth: t(), uDepthX: v4(), tExp: t(), uW: v4(),
+      }),
       adapt: mat(ADAPT_FRAG, {
-        tHist: t(), tPrev: t(), uMinLog: f(-16), uLogRange: f(28), uP: v4(), uClamp: v4(), uAdapt: v4(), uPrior: v4(),
+        tHist: t(), tPrev: t(), uMinLog: f(HIST_MIN_LOG), uLogRange: f(HIST_LOG_RANGE), uP: v4(), uClamp: v4(), uKey: v4(), uKeyDeep: { value: new THREE.Vector3() },
+        uAdapt: v4(), uMaxRate: v2(), uSubj: v4(), uPrior: v4(),
         uManualL: f(), uSun: v4(), tBloom: t(), uBloomX: v4(), tDepth: t(), uDepthX: v4(), uSkyDepth: f(3e5),
-        uAspect: f(1), uSubjOverride: f(0),
+        uAspect: f(1), uSubjOverride: f(0), uSubjHint: f(0),
       }),
       flare: mat(FLARE_FRAG, { tSrc: t(), uSrc: v4(), tExp: t(), uAspect: f(1), uThreshold: f(6), uSunMask: v4() }),
       dirt: mat(DIRT_FRAG, {}),
@@ -118,6 +125,7 @@ export class PostShared {
         uHazeB: { value: Array.from({ length: MAX_HAZE }, () => new THREE.Vector4()) },
         uHazeC: { value: Array.from({ length: MAX_HAZE }, () => new THREE.Vector4()) },
         uShimmer: v4(), uMB: v4(), uReproj: { value: new THREE.Matrix4() }, uProj: v4(), uSubjOverride: f(0),
+        tLocal: t(), uLocalX: v4(), uLocal: v4(), uKey: v4(), uNight: v4(),
         uSun: v4(), uSunRot: v4(), uTonemap: { value: 0 }, uLook: { value: new THREE.Vector3(1, 1, 1) },
         uDebug: { value: 0 },
       }),
