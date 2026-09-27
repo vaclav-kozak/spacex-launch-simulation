@@ -8,3 +8,4 @@ __pycache__/
 *.blend1
 .cache/
 .claude/scheduled_tasks.lock
+/video/

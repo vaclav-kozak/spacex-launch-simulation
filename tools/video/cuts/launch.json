@@ -1,0 +1,25 @@
+{
+  "about": "Twilight launch highlight cut, ~90 s. Times are mission seconds (T+). 'in' is the transition from the previous shot: cut, or dissolve with 'xf' seconds.",
+  "query": "tod=twilight&quality=ultra",
+  "fps": 60,
+  "size": [1920, 1080],
+  "scale": 2,
+  "shots": [
+    { "id": "01_pad_wide",   "cam": "S1:pad:wide",           "t0": -16.0, "t1": -10.0, "preroll": 2 },
+    { "id": "02_pad_up",     "cam": "S1:pad:up",             "t0": -10.0, "t1": -4.6,  "preroll": 2, "in": "cut" },
+    { "id": "03_ignition",   "cam": "S1:pad:engine",         "t0": -4.6,  "t1": 1.5,   "preroll": 2, "in": "cut" },
+    { "id": "04_liftoff",    "cam": "S1:pad:up",             "t0": 1.5,   "t1": 8.5,   "preroll": 5.5, "in": "cut" },
+    { "id": "05_tracking",   "cam": "S1:long_lens",          "t0": 13.0,  "t1": 21.5,  "preroll": 3, "in": "dissolve", "xf": 0.6 },
+    { "id": "06_staging",    "cam": "S1:chase",              "t0": 143.5, "t1": 151.0, "preroll": 2, "split": true, "in": "dissolve", "xf": 0.6 },
+    { "id": "07_jellyfish",  "cam": "S1:long_lens:twilight", "t0": 151.0, "t1": 164.0, "preroll": 4, "in": "cut" },
+    { "id": "08_mvac",       "cam": "S2:onboard_engine",     "t0": 164.0, "t1": 170.0, "preroll": 2, "in": "cut" },
+    { "id": "09_entry_burn", "cam": "S1:chase",              "t0": 384.0, "t1": 394.5, "preroll": 3, "in": "dissolve", "xf": 0.6 },
+    { "id": "10_landing",    "cam": "S1:onboard_down",       "t0": 486.0, "t1": 494.0, "preroll": 3, "in": "dissolve", "xf": 0.5 },
+    { "id": "11_touchdown",  "cam": "SHIP:deck",             "t0": 499.5, "t1": 510.5, "preroll": 3, "in": "cut" },
+    { "id": "12_on_deck",    "cam": "S1:cinematic:ship_orbit", "t0": 511.0, "t1": 520.0, "preroll": 10, "in": "dissolve", "xf": 0.8 }
+  ],
+  "cards": [
+    { "shot": "01_pad_wide", "from": 0.6, "to": 5.4, "title": "FALCON 9 · STARLINK · OCISLY", "sub": "Real-time simulation in the browser" },
+    { "shot": "12_on_deck", "from": 2.5, "to": 9.0, "title": "spacex.vaclavkozak.com", "tracking": 0.1, "sub": "Fan-made simulation · not affiliated with SpaceX" }
+  ]
+}

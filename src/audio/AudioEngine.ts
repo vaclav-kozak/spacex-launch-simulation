@@ -832,6 +832,8 @@ export class AudioEngine {
   }
 
   // ------------------------------------------------------------------ debug capture (tests)
+  /** audio-clock sample frame of the first sample of the current capture (null until it arrives) */
+  captureStartFrame: number | null = null;
   /** Start recording the master output (post limiter) into memory. */
   async debugCaptureStart(): Promise<boolean> {
     const ac = this.ac;
@@ -842,9 +844,11 @@ export class AudioEngine {
       this.runGain.connect(this.tap).connect(z).connect(ac.destination);
       this.tap.port.onmessage = (e) => {
         if (this.capture && Array.isArray(e.data)) { this.capture.l.push(e.data[0]); this.capture.r.push(e.data[1]); }
+        else if (e.data && typeof e.data.start === 'number') this.captureStartFrame = e.data.start;
       };
     }
     this.capture = { l: [], r: [] };
+    this.captureStartFrame = null;
     this.tap.port.postMessage('start');
     return true;
   }

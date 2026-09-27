@@ -233,11 +233,13 @@ registerProcessor('rocket-noise', RocketNoise);
 class TapRecorder extends AudioWorkletProcessor {
   constructor() {
     super(); this.on = false;
-    this.port.onmessage = (e) => { if (e.data === 'start') this.on = true; else if (e.data === 'stop') { this.on = false; this.port.postMessage('stopped'); } };
+    this.port.onmessage = (e) => { if (e.data === 'start') { this.on = true; this.marked = false; } else if (e.data === 'stop') { this.on = false; this.port.postMessage('stopped'); } };
   }
   process(inputs) {
     const inp = inputs[0];
     if (this.on && inp && inp.length) {
+      // audio-clock frame of the first recorded sample (aligns captures with ac.currentTime)
+      if (!this.marked) { this.marked = true; this.port.postMessage({ start: currentFrame }); }
       const l = new Float32Array(inp[0]); const r = new Float32Array(inp[1] || inp[0]);
       this.port.postMessage([l, r], [l.buffer, r.buffer]);
     }

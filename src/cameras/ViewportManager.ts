@@ -121,34 +121,42 @@ export class ViewportManager {
     const fake = params.get('camfake');
     if (fake && fake !== '0') installFakeSim(this.ctx, fake);
     const cam = params.get('cam');
-    if (cam) {
-      const parts = cam.split(':');
-      let focus = parseBody(parts[0]);
-      let mode: CameraMode | null, preset: string;
-      if (focus) { mode = parseMode(parts[1]); preset = parts[2] ?? ''; }
-      else { focus = 'S1'; mode = parseMode(parts[0]); preset = parts[1] ?? ''; }
-      if (focus === 'SHIP' && !mode) mode = 'deck';
-      // rebuild views on the first update with the forced mode, no transition animation
-      for (const v of [...this.vs.values()]) this.dropView(v);
-      this.cutLayout = true;
-      if (params.get('split') === '1') {
-        // keep the automatic tiling; force the mode on the matching view when it exists
-        this.solo = null;
-        this.pendingForce = { focus, mode, preset };
-      } else {
-        this.solo = { focus, mode, preset };
-      }
-    }
+    if (cam) this.forceCam(cam, params.get('split') === '1');
   }
   private pendingForce: { focus: BodyId; mode: CameraMode | null; preset: string } | null = null;
 
-  /** 'cycle' | 'restore' | 'maximize:<id>' | 'mode:<CameraMode>' | 'fov:<+-deg>' | 'director:on|off|toggle' */
+  /** Hard cut to <BODY>[:<mode>[:<preset>]] | <mode>[:<preset>]. split: keep the automatic tiling
+   * and force the mode on the matching view; otherwise that camera goes full screen. */
+  forceCam(cam: string, split = false): void {
+    const parts = cam.split(':');
+    let focus = parseBody(parts[0]);
+    let mode: CameraMode | null, preset: string;
+    if (focus) { mode = parseMode(parts[1]); preset = parts[2] ?? ''; }
+    else { focus = 'S1'; mode = parseMode(parts[0]); preset = parts[1] ?? ''; }
+    if (focus === 'SHIP' && !mode) mode = 'deck';
+    // rebuild views on the next update with the forced mode, no transition animation
+    for (const v of [...this.vs.values()]) this.dropView(v);
+    this.cutLayout = true;
+    this.maximized = null;
+    if (split) {
+      this.solo = null;
+      this.pendingForce = { focus, mode, preset };
+    } else {
+      this.pendingForce = null;
+      this.solo = { focus, mode, preset };
+    }
+  }
+
+  /** 'cycle' | 'restore' | 'maximize:<id>' | 'mode:<CameraMode>' | 'fov:<+-deg>' | 'director:on|off|toggle'
+   * | 'cam:<spec>' | 'split:<spec>' (see forceCam) */
   command(cmd: string): void {
     const i = cmd.indexOf(':');
     const c = i < 0 ? cmd : cmd.slice(0, i);
     const arg = i < 0 ? '' : cmd.slice(i + 1);
     const p = this.primaryState();
     switch (c) {
+      case 'cam': this.forceCam(arg, false); break;
+      case 'split': this.forceCam(arg, true); break;
       case 'cycle': {
         if (!p) return;
         const btns = this.modeButtons(p);

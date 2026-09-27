@@ -65,6 +65,8 @@ export class App {
   private last = performance.now();
   private lastSnap: SimSnapshot | null = null;
   frameCount = 0;
+  /** true once start() has loaded everything and applied the URL params */
+  ready = false;
 
   constructor(private root: HTMLElement) {
     const canvas = document.createElement('canvas');
@@ -174,7 +176,9 @@ export class App {
     if (warp) this.sim.setWarp(Number(warp));
     if (this.params.get('pause') === '1') this.sim.setPaused(true);
     this.last = performance.now();
-    renderLoop(this);
+    // ?step=1: no rAF loop; an external driver calls frame(dt) (offline video capture, tools/video)
+    this.ready = true;
+    if (this.params.get('step') !== '1') renderLoop(this);
   }
 
   private resize(): void {

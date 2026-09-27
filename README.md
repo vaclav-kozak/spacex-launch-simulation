@@ -363,6 +363,7 @@ per frame and raises one after 6 s below 13 ms. The line under the selector show
 | `director=0` | Turns off the auto-director |
 | `clouds=0..1.5` | Scales the cloud coverage (0 = clear sky) |
 | `hud=0` / `labels=0` | Hides the HUD / the viewport labels |
+| `step=1` | No render loop; an external driver advances the sim with `__app.frame(dt)` (video capture) |
 
 ## Architecture
 
@@ -380,6 +381,7 @@ src/audio     Web Audio engine, AudioWorklet synth, propagation, callouts
 src/ui        webcast HUD, controls, captions, manual-landing HUD, summary, photo mode
 blender/      headless Blender model builders + numpy texture generators
 tools/audio/  offline callout generation (Kokoro TTS), capture and analysis
+tools/video/  offline 4K60 video rendering: cut lists, frame-stepped takes, audio takes, assembly
 scripts/      shot.py (headless GPU screenshots), perf.py (frame cost), simtest.ts
 docs/         per-area notes and asset licenses
 ```
@@ -414,6 +416,38 @@ proxy and Cloudflare, uses a few MB of RAM and almost no CPU.
 docker build -t spacex-launch-simulation .
 docker run --rm -p 8080:80 spacex-launch-simulation   # → http://localhost:8080
 ```
+
+## Rendering a video
+
+`tools/video/` turns the sim into a trailer-style edit. The browser cannot capture 4K at 60 fps in real
+time, so the video is not a screen recording. Each shot of a cut list
+([`cuts/launch.json`](tools/video/cuts/launch.json): camera, mission-time range, transition, title cards)
+is rendered frame by frame and then assembled with ffmpeg.
+
+```bash
+npm run dev                                          # the tools load the dev server
+python3 tools/video/render.py tools/video/cuts/launch.json    # 4K60 video takes (~0.3-0.5 s per frame)
+python3 tools/video/audio.py tools/video/cuts/launch.json     # audio takes, recorded in real time
+python3 tools/video/assemble.py tools/video/cuts/launch.json  # edit + deliverables in video/launch/
+```
+
+- **Video takes.** The page runs with `?step=1`, so it has no render loop, and the script calls
+  `__app.frame(1/60)` for every frame. Timers run on Playwright's fake clock, and CSS animations (HUD
+  captions, banners) are stepped on the same virtual clock. A frame can take half a second to render and
+  the take is still perfectly smooth. The viewport is 1920×1080 CSS at device pixel ratio 2. The canvas
+  and the HUD render natively at 3840×2160 (the HUD is not upscaled), and CDP screenshots are piped to
+  x264 as 4:4:4 CRF 10. Every take starts with a few seconds of pre-roll that is rendered but not kept,
+  so auto-exposure, smoke and plume history settle before the first kept frame.
+- **Audio takes.** Web Audio cannot be frame-stepped, so each shot is played once in real time at low
+  render quality. The sim is driven from the AudioContext clock, and the AudioWorklet tap reports the
+  sample frame of its first sample. Each WAV therefore starts exactly at the shot's first mission time,
+  whatever the render hitches.
+- **Assembly.** Hard cuts and dissolves (video `xfade` plus audio `acrossfade`). Title cards are drawn
+  with PIL in the HUD's D-DIN font. The mix is resampled to 48 kHz and loudness-normalised to −14 LUFS /
+  −1 dBTP in two passes. Outputs:
+  - a 4:4:4 edit master
+  - a 4K60 H.264 file for YouTube
+  - a 1080p60 H.264 file for X, LinkedIn and Facebook
 
 ## Known limitations
 
