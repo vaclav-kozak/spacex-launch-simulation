@@ -39,6 +39,25 @@ export function settingsFromUrl(base: Settings, params: URLSearchParams): Settin
   if (params.has('soot')) s.sootyBooster = params.get('soot') !== '0';
   if (params.has('manual')) s.manualLanding = params.get('manual') === '1';
   const q = params.get('quality');
-  if (q === 'auto' || q === 'low' || q === 'medium' || q === 'high' || q === 'ultra') s.quality = q;
+  if (isQualityPreset(q)) s.quality = q;
   return s;
+}
+
+export function isQualityPreset(q: unknown): q is QualityPreset {
+  return q === 'auto' || q === 'low' || q === 'medium' || q === 'high' || q === 'ultra';
+}
+
+const QUALITY_KEY = 'f9sim.quality';
+
+/** Apply preferences remembered from earlier visits (currently the render quality preset). */
+export function storedSettings(base: Settings): Settings {
+  try {
+    const q = globalThis.localStorage?.getItem(QUALITY_KEY);
+    if (isQualityPreset(q)) return { ...base, quality: q };
+  } catch { /* storage blocked */ }
+  return base;
+}
+
+export function storeQuality(q: QualityPreset): void {
+  try { globalThis.localStorage?.setItem(QUALITY_KEY, q); } catch { /* storage blocked */ }
 }

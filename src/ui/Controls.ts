@@ -6,6 +6,7 @@ import type { QualityPreset, TimeOfDay } from '../core/settings';
 import { h, setText, toggleClass } from './util';
 
 export const WARP_LEVELS = [1, 2, 4, 8, 30, 100] as const;
+const QUALITY_LABELS = ['LOW', 'MEDIUM', 'HIGH', 'ULTRA'] as const;
 
 export interface ControlState {
   canLiftoff: boolean;
@@ -105,6 +106,7 @@ export class Controls {
   private warp: Seg<number>;
   private tod: Seg<TimeOfDay>;
   private quality: Seg<QualityPreset>;
+  private qNote: HTMLElement;
   private sea: ReturnType<typeof slider>;
   private wind: ReturnType<typeof slider>;
   private windDir: ReturnType<typeof slider>;
@@ -157,6 +159,7 @@ export class Controls {
     this.quality = seg<QualityPreset>([
       { v: 'auto', label: 'AUTO' }, { v: 'low', label: 'LOW' }, { v: 'medium', label: 'MED' }, { v: 'high', label: 'HIGH' }, { v: 'ultra', label: 'ULTRA' },
     ], (v) => { actions.setSetting('quality', v); this.quality.set(v); });
+    this.qNote = h('div', { class: 'cp-qnote' });
 
     this.bReplay = button('REPLAY', 'R', () => ui.toggleReplay());
     const bPhoto = button('PHOTO', 'P', () => actions.togglePhotoMode());
@@ -171,7 +174,7 @@ export class Controls {
       sec('TIME WARP', this.warp.el),
       sec('CONDITIONS', this.tod.el, this.sea.el, this.wind.el, this.windDir.el),
       sec('VEHICLE', this.tSoot.el, this.tManual.el),
-      sec('RENDER QUALITY', this.quality.el),
+      sec('RENDER QUALITY', this.quality.el, this.qNote),
       h('section', { class: 'cp-sec cp-actions' }, h('div', { class: 'row2' }, this.bReplay, bPhoto, this.bSummary, bRestart)),
     );
     this.el = h('div', { class: 'cpanel', role: 'region', 'aria-label': 'Simulation controls' }, header, this.body);
@@ -227,6 +230,10 @@ export class Controls {
     const s = this.ctx.settings;
     this.tod.set(s.timeOfDay);
     this.quality.set(s.quality);
+    const q = this.ctx.quality;
+    const fps = Math.round(1000 / Math.max(1, q.frameMs));
+    const lvl = QUALITY_LABELS[q.level];
+    setText(this.qNote, s.quality === 'auto' ? `AUTO → ${lvl} · ${fps} FPS` : `${lvl} · ${fps} FPS`);
     this.sea.set(s.seaState);
     this.wind.set(s.windSpeed);
     this.windDir.set(s.windFromDeg);

@@ -185,6 +185,7 @@
 .cpanel.collapsed .cp-body { display: none; }
 .cp-sec { display: flex; flex-direction: column; gap: 6px; padding: 9px 0 10px; border-bottom: 1px solid rgba(255, 255, 255, 0.07); }
 .cp-sec:last-child { border-bottom: 0; padding-bottom: 0; }
+.cp-qnote { margin-top: 5px; font: 600 9px/1 var(--f-ui); letter-spacing: 0.18em; color: var(--ink3); font-variant-numeric: tabular-nums; }
 .cp-sec h3 { margin: 0 0 2px; font: 700 9.5px/1 var(--f-ui); letter-spacing: 0.26em; color: var(--ink3); }
 .override-sec h3 { color: var(--amber); display: flex; align-items: center; gap: 8px; }
 .override-sec h3::after { content: ''; flex: 1; height: 5px; background: repeating-linear-gradient(135deg, rgba(255, 178, 62, 0.55) 0 3px, transparent 3px 6px); }

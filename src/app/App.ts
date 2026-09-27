@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import type { AppContext, ViewInfo } from '../core/context';
 import { EventBus } from '../core/events';
-import { DEFAULT_SETTINGS, settingsFromUrl, type Settings } from '../core/settings';
+import { DEFAULT_SETTINGS, settingsFromUrl, storedSettings, storeQuality, type Settings } from '../core/settings';
 import type { SimSnapshot } from '../core/types';
 import { Simulation, type ManualInput, type MissionSummary } from '../sim/Simulation';
 import { Environment } from '../render/env/Environment';
@@ -85,7 +85,7 @@ export class App {
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFShadowMap;
 
-    const settings = settingsFromUrl(DEFAULT_SETTINGS, this.params);
+    const settings = settingsFromUrl(storedSettings(DEFAULT_SETTINGS), this.params);
     const scene = new THREE.Scene();
     const worldRoot = new THREE.Group();
     worldRoot.name = 'worldRoot';
@@ -131,6 +131,7 @@ export class App {
         app.ctx.settings[key] = value;
         app.sim.applySettings(app.ctx.settings);
         if (key === 'muted') app.audio.setMuted(value as boolean);
+        if (key === 'quality') storeQuality(value as Settings['quality']);
         app.ctx.events.emit({ type: 'SETTINGS_CHANGED', t: app.sim.getSnapshot().t, data: { key, value } });
       },
       setManualInput: (i) => app.sim.setManualInput(i),

@@ -120,7 +120,12 @@ full list.
 | K | Manual landing mode. During the landing burn: W/S throttle, X cut, arrows and A/D steer |
 
 The panel also sets time of day (morning / twilight / night), sea state, wind, the flight-proven sooty
-booster, render quality and restart. An end-of-mission summary appears when the mission resolves.
+booster and restart. An end-of-mission summary appears when the mission resolves.
+
+**Render quality** (panel → RENDER QUALITY): AUTO (default) adapts to the frame rate. LOW / MED / HIGH /
+ULTRA fix the level; each scales render resolution, cloud and plume ray-march resolution and steps, ocean
+detail, particle budgets and post effects. The line under the selector shows the active level and fps. Your
+choice is remembered between visits. `?quality=` overrides it.
 
 ### URL parameters (testing / screenshots)
 
