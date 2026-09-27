@@ -3,7 +3,8 @@
 // soft-particle smoke sampling ctx.sceneDepth (LAYER_VFX), heat-haze sources, 1-4 viewports with
 // animated rects.
 //   ?scene=day|twilight|night|space  views=1..4  anim=1  move=1  q=0..3  photo=1  dof=1
-//   debug=depth|bloom|exposure|haze|dirt|flare  modes=chase,long_lens,onboard_down,pad  tm=agx|aces
+//   debug=depth|bloom|exposure|haze|dirt|flare  modes=chase,long_lens,onboard_down,pad,onboard_engine  tm=agx|aces
+//   (onboard_engine = haze near-plane test: camera beside the plume, the capsule crosses the camera plane)
 import * as THREE from 'three';
 import { LAYER_DEFAULT, LAYER_VFX, type AppContext, type ViewInfo, type CameraMode } from '../../core/context';
 import { EventBus } from '../../core/events';
@@ -325,6 +326,12 @@ function updateScene(t: number) {
     } else if (v.mode === 'pad') {
       v.camWorldPos.set(120, padY + 1.6, 160);
       cam.lookAt(tmp.copy(rocketPos).add(new THREE.Vector3(0, 30, 0)).sub(v.camWorldPos));
+    } else if (v.mode === 'onboard_engine') {
+      // haze near-plane test: beside the plume looking down it, the haze capsule starts behind the camera plane
+      v.camWorldPos.copy(new THREE.Vector3(7, -8, 2).applyMatrix4(rocketW));
+      const target = new THREE.Vector3(2, -40, 0).applyMatrix4(rocketW);
+      cam.up.set(1, 0, 0).applyQuaternion(rocket.quaternion);
+      cam.lookAt(target.sub(v.camWorldPos));
     } else {
       // onboard: bolted to the interstage looking down the side
       v.camWorldPos.copy(new THREE.Vector3(2.1, 43.5, 0.7).applyMatrix4(rocketW));

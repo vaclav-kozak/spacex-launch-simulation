@@ -1,4 +1,4 @@
-// Small post passes: linear depth, bloom chain, exposure metering, screen-space ghosts,
+// Small post passes: linear depth, bloom chain, exposure metering, lens-ghost source statistics,
 // procedural lens dirt, photo-mode DOF.
 import { COMMON } from './common';
 
@@ -291,57 +291,68 @@ void main() {
 }
 `;
 
-/** Screen-space ghosts of bright (clipped) sources, e.g. a night plume. Quarter/eighth res. */
-export const FLARE_FRAG = /* glsl */ `
+/** Lens-ghost source statistics, stage 1: one fragment per column of a small bloom mip, 2 rows.
+ * Ghosts are drawn analytically in the composite from these moments, so only a COMPACT clipped
+ * highlight (a distant plume core, a lamp) makes them; a broad source (a plume filling the frame,
+ * plume-lit smoke) has a large spread and gets none.
+ *   w = (exposed luminance - threshold)+ x texel area (frame-height^2 units), p = offset from the
+ *       optical centre in frame-height units (x scaled by aspect)
+ *   row 0: sum w, sum w p.x, sum w p.y, sum w |p|^2      row 1: sum w chroma.rgb, max exposed lum */
+export const GHOST_COLS_FRAG = /* glsl */ `
 ${COMMON}
 uniform sampler2D tSrc;
-uniform vec4 uSrc;
+uniform ivec2 uSize;
 uniform sampler2D tExp;
 uniform float uAspect;
 uniform float uThreshold;
-uniform vec4 uSunMask;  // sun uv, radius, on
-varying vec2 vUv;
-vec3 bright(vec2 uv, float ex) {
-  vec2 inb = step(vec2(0.0), uv) * step(uv, vec2(1.0));
-  if (inb.x * inb.y < 0.5) return vec3(0.0);
-  vec3 c = texture2D(tSrc, rgn(uv, uSrc)).rgb * ex;
-  if (uSunMask.w > 0.5) {
-    vec2 d = (uv - uSunMask.xy) * vec2(uAspect, 1.0);
-    c *= smoothstep(uSunMask.z * 3.0, uSunMask.z * 6.0, length(d));
-  }
-  float l = luma(c);
-  // fade toward the frame edge (vignetted rays don't make ghosts)
-  vec2 e = min(uv, 1.0 - uv);
-  float edge = smoothstep(0.0, 0.12, min(e.x, e.y));
-  return c * (max(l - uThreshold, 0.0) / max(l, 1e-4)) * edge;
-}
+uniform vec4 uSunMask;  // sun uv, radius (uv-y), on
 void main() {
+  int x = int(gl_FragCoord.x);
+  int row = int(gl_FragCoord.y);
   float ex = texelFetch(tExp, ivec2(0), 0).g;
-  vec2 p = vUv - 0.5;
-  vec3 acc = vec3(0.0);
-  // ghost scale factors (negative = mirrored through the optical center), tints = coating colors
-  const float SC0 = -0.62, SC1 = -1.35, SC2 = 0.45, SC3 = -2.4, SC4 = 1.7;
-  const vec3 T0 = vec3(0.7, 0.82, 1.0), T1 = vec3(1.0, 0.86, 0.72), T2 = vec3(0.75, 1.0, 0.8);
-  const vec3 T3 = vec3(0.9, 0.75, 1.0), T4 = vec3(1.0, 0.94, 0.82);
-  float sc[5] = float[](SC0, SC1, SC2, SC3, SC4);
-  vec3 tint[5] = vec3[](T0, T1, T2, T3, T4);
-  // hexagonal ring of taps rounds the blocky low-res source into an aperture-like soft disc
-  const vec2 RING[6] = vec2[](vec2(1.0, 0.0), vec2(0.5, 0.866), vec2(-0.5, 0.866),
-                              vec2(-1.0, 0.0), vec2(-0.5, -0.866), vec2(0.5, -0.866));
-  for (int i = 0; i < 5; i++) {
-    float s = sc[i];
-    vec3 g;
-    g.r = bright(0.5 + p / (s * 1.006), ex).r;
-    g.g = bright(0.5 + p / s, ex).g;
-    g.b = bright(0.5 + p / (s * 0.994), ex).b;
-    vec2 c = 0.5 + p / s;
-    vec2 rr = vec2(0.010 / uAspect, 0.010) / abs(s);
-    vec3 ring = vec3(0.0);
-    for (int k = 0; k < 6; k++) ring += bright(c + RING[k] * rr, ex);
-    g = g * 0.35 + ring * (0.65 / 6.0);
-    acc += g * tint[i] / (s * s);
+  ex = (ex > 0.0 && ex < 1e9) ? ex : 0.0;
+  vec2 inv = 1.0 / vec2(uSize);
+  float area = uAspect * inv.x * inv.y;
+  vec4 acc = vec4(0.0);
+  for (int y = 0; y < uSize.y; y++) {
+    vec3 c = texelFetch(tSrc, ivec2(x, y), 0).rgb * ex;
+    vec2 uv = (vec2(float(x), float(y)) + 0.5) * inv;
+    // the sun has its own analytic ghosts (composite sunFx)
+    if (uSunMask.w > 0.5) c *= smoothstep(uSunMask.z * 3.0, uSunMask.z * 6.0, length((uv - uSunMask.xy) * vec2(uAspect, 1.0)));
+    float l = luma(c);
+    // rays from the frame edge are vignetted inside the lens and make weaker ghosts
+    vec2 e = min(uv, 1.0 - uv);
+    float w = max(l - uThreshold, 0.0) * smoothstep(0.0, 0.1, min(e.x, e.y)) * area;
+    vec2 p = (uv - 0.5) * vec2(uAspect, 1.0);
+    if (row == 0) acc += w * vec4(1.0, p, dot(p, p));
+    else { acc.rgb += c * (w / max(l, 1e-6)); acc.a = max(acc.a, l); }
   }
-  gl_FragColor = vec4(acc, 1.0);
+  gl_FragColor = acc;
+}
+`;
+
+/** Lens-ghost source statistics, stage 2 (2x1): texel 0 = (flux, centroid.xy, spread), texel 1 =
+ * (w-weighted chroma.rgb, max exposed lum). Flux in exposed-luminance x frame-height^2, centroid
+ * and spread (rms radius) in frame-height units from the optical centre. */
+export const GHOST_REDUCE_FRAG = /* glsl */ `
+uniform sampler2D tCols;
+uniform int uCols;
+void main() {
+  vec4 s0 = vec4(0.0), s1 = vec4(0.0);
+  for (int x = 0; x < uCols; x++) {
+    s0 += texelFetch(tCols, ivec2(x, 0), 0);
+    vec4 b = texelFetch(tCols, ivec2(x, 1), 0);
+    s1.rgb += b.rgb;
+    s1.a = max(s1.a, b.a);
+  }
+  float F = s0.x;
+  if (int(gl_FragCoord.x) == 0) {
+    vec2 c = F > 0.0 ? s0.yz / F : vec2(0.0);
+    float sig = F > 0.0 ? sqrt(max(s0.w / F - dot(c, c), 0.0)) : 1.0;
+    gl_FragColor = vec4(F, c, sig);
+  } else {
+    gl_FragColor = vec4(F > 0.0 ? s1.rgb / F : vec3(1.0), s1.a);
+  }
 }
 `;
 

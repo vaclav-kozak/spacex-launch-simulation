@@ -10,7 +10,7 @@ import { altitudeOf, enuAt, pointAlongAzimuth, upAt } from '../core/frames';
 import { F9, OCISLY, MERLIN_1D, MERLIN_VAC } from '../core/vehicleSpec';
 import {
   RAD, bodyFraming, clamp, isStacked, clampAboveSurface, expK, lerp, lookQuat, noise1, plumeLength,
-  smoothDampScalar, smoothDampVec, smoothstep, travelBasis, type Framing,
+  plumeBoundary, plumeRadius, type PlumeBoundary, smoothDampScalar, smoothDampVec, smoothstep, travelBasis, type Framing,
 } from './util';
 
 export interface RigInput {
@@ -47,6 +47,8 @@ const _v1 = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
 const _v3 = new THREE.Vector3();
 const _v4 = new THREE.Vector3();
+const _v5 = new THREE.Vector3();
+const _v6 = new THREE.Vector3();
 const _q1 = new THREE.Quaternion();
 const _q2 = new THREE.Quaternion();
 const Y = new THREE.Vector3(0, 1, 0);
@@ -69,6 +71,42 @@ export abstract class Rig {
 
 // ---------------------------------------------------------------------------------------------
 // CHASE: spring-follow with lag; offset depends on flight phase.
+
+/**
+ * Rotate a chase offset (relative to the framing centre) about the body, in the plane of the stage axis, from
+ * its aft polar angle toward side-on (at most 100 deg from the aft axis) until the camera sits outside the S1
+ * expanded-plume boundary with a margin. Distance is kept. No-op while the camera is already clear.
+ */
+const _pb: PlumeBoundary = { L: 0, Rc: 0, tanT: 0, p: 1, a0: 0 };
+function clearOfPlume(off: THREE.Vector3, fr: Framing, snap: SimSnapshot, side: THREE.Vector3): void {
+  const pb = plumeBoundary(snap, 'S1', _pb);
+  if (!pb) return;
+  const ax = fr.axis;
+  const D = off.length();
+  if (D < 1e-3) return;
+  const nozzle = _v5.copy(fr.center).sub(snap.bodies.S1.pos); // framing centre relative to the nozzle exit
+  const outside = (o: THREE.Vector3): boolean => {
+    const q = _v6.copy(nozzle).add(o);
+    const along = q.dot(ax);
+    const a = -along; // aft distance from the exit plane
+    if (a <= 0) return true;
+    const rho = Math.sqrt(Math.max(q.lengthSq() - along * along, 0));
+    return rho > plumeRadius(pb, a) * 1.1 + 0.08 * D;
+  };
+  if (outside(off)) return;
+  const along = off.dot(ax);
+  const perp = _v4.copy(off).addScaledVector(ax, -along);
+  if (perp.lengthSq() < 1e-6 * D * D) perp.copy(side).addScaledVector(ax, -side.dot(ax));
+  perp.normalize();
+  const phi0 = Math.atan2(off.dot(perp), -along);
+  const phiMax = 100 * RAD;
+  let phi = phi0;
+  for (let i = 1; i <= 24 && phi < phiMax; i++) {
+    phi = Math.min(phiMax, phi0 + (phiMax - phi0) * (i / 24));
+    off.copy(ax).multiplyScalar(-Math.cos(phi) * D).addScaledVector(perp, Math.sin(phi) * D);
+    if (outside(off)) return;
+  }
+}
 
 export class ChaseRig extends Rig {
   readonly mode = 'chase' as const;
@@ -159,6 +197,9 @@ export class ChaseRig extends Rig {
       target.multiplyScalar(this.pull);
       // a chase is a chase: never more than CHASE_MAX_DIST out (anything farther is a long-lens shot)
       if (target.lengthSq() > CHASE_MAX_DIST * CHASE_MAX_DIST) target.setLength(CHASE_MAX_DIST);
+      // high up the booster plume balloons into a ~70 deg "jellyfish": swing forward (same distance) until
+      // the camera is outside it, so the shell is seen from outside instead of fogging the frame
+      if (focus === 'S1' && isStacked(snap) && b.thrust > 1) clearOfPlume(target, fr, snap, side);
       // acceleration lag: camera trails when the vehicle accelerates (engine start, staging)
       if (dtSim > 1e-4 && !this.fresh) {
         _v1.copy(b.vel).sub(this.prevVel).multiplyScalar(1 / dtSim);
@@ -220,10 +261,13 @@ export class ChaseRig extends Rig {
 // ---------------------------------------------------------------------------------------------
 // ONBOARD cams: rigidly attached to the body.
 
-/** S2 engine camera pod on the aft skirt rim (S2 body frame: origin = MVac exit, skirt rim at y 3.9, r 1.83;
- * the pod stands ~12 cm proud of the skirt, like the real one). Dev override: ?s2cam=angle,r,y,tilt,roll,fov. Earthward
- * is body angle ~90 deg during the burn (sim roll), so 115 deg shows the limb tilted across the frame. */
-const S2_ENGINE_CAM = { angleDeg: 115, radius: 1.95, y: 3.85, tiltDeg: 28, rollDeg: 0, fov: 64 };
+/** S2 engine camera pod (S2 body frame: origin = MVac exit, skirt rim at y 3.9, r 1.83). A pod right at the skirt
+ * looks almost straight down the bell, so the round exit rim reads as a circle and the bell as an egg. This one
+ * sits on a boom ~1.7 m outboard and ~1.9 m below the skirt, looking in and down (67 deg off the stage axis) with a
+ * wide lens: the bell flares from the throat at the top of the frame to a flat rim ellipse near the bottom, ~30-35%
+ * of the frame width, with the Earth behind it. Earthward is body angle ~90 deg during the burn (sim roll), so
+ * 225 deg puts the limb and black sky on the left. Dev override: ?s2cam=angle,r,y,tilt,roll,fov. */
+const S2_ENGINE_CAM = { angleDeg: 225, radius: 3.5, y: 2.1, tiltDeg: 67, rollDeg: 0, fov: 80 };
 function devEngineCam(): Partial<typeof S2_ENGINE_CAM> {
   if (typeof location === 'undefined') return {};
   const v = new URLSearchParams(location.search).get('s2cam');
@@ -251,8 +295,8 @@ export class OnboardRig extends Rig {
       const fwd = new THREE.Vector3(0, -1, 0).addScaledVector(radial, 0.13).normalize();
       lookQuat(fwd, tang.negate(), this.localQuat);
     } else {
-      // S2 engine cam: on a bracket just under the aft-skirt rim, looking aft along the stage and in
-      // toward the MVac so the bell hangs from the top of the frame, glowing, with the Earth beyond.
+      // S2 engine cam: boom pod outboard of the aft skirt, looking aft and in toward the MVac so the bell
+      // hangs from the top of the frame and flares toward its exit rim, glowing, with the Earth beyond.
       const c = { ...S2_ENGINE_CAM, ...devEngineCam() };
       const a = c.angleDeg * RAD;
       const radial = new THREE.Vector3(Math.cos(a), 0, Math.sin(a));
@@ -365,7 +409,13 @@ export class LongLensRig extends Rig {
     const b = snap.bodies[focus];
     const fr = bodyFraming(snap, focus, this.fr);
     const plume = plumeLength(snap, focus);
-    const target = _v1.copy(fr.center).addScaledVector(fr.axis, -Math.min(plume, fr.size * 3) * 0.3);
+    // high up the plume balloons into a "jellyfish" km across: frame the vehicle together with the near field
+    // of the shell (to ~0.35 L aft of the nozzle, where it is brightest), not the vehicle alone with a lens
+    // so tight that the frame is the inside of the shell
+    const pb = plumeBoundary(snap, focus === 'S2' && isStacked(snap) ? 'S1' : focus, _pb);
+    const aP = pb ? Math.min(0.35 * pb.L, 1500) : 0;
+    const wP = pb ? 2 * plumeRadius(pb, aP) : 0;
+    const target = _v1.copy(fr.center).addScaledVector(fr.axis, -Math.max(Math.min(plume, fr.size * 3) * 0.3, aP * 0.45));
     const tgt = new THREE.Vector3().copy(target);
     const site = this.chooseSite(snap, focus, tgt);
     if (site !== this.site) { this.site = site; this.fresh = true; }
@@ -391,7 +441,9 @@ export class LongLensRig extends Rig {
     const extent = Math.max(8 + plume * 0.6, (fr.size * 1.15 + Math.min(plume, fr.size * 4) * 0.3) * Math.max(0.25, sinA));
     // a big expanding plume reads as a shape only with sky around it (else a flat wall of plume)
     const fill = lerp(0.42, 0.24, smoothstep(1, 3.5, plume / Math.max(1, fr.size)));
-    const fovT = clamp((2 * Math.atan(extent / fill / 2 / Math.max(1, dist))) / RAD, 0.12, 32);
+    // the expanded shell: its width (a cone's cross-section, any view angle) or its projected length
+    const shell = pb ? Math.max(wP, (fr.size + aP) * sinA) / 0.65 : 0;
+    const fovT = clamp((2 * Math.atan(Math.max(extent / fill, shell) / 2 / Math.max(1, dist))) / RAD, 0.12, 32);
     this.fov = this.fresh ? fovT : Math.exp(lerp(Math.log(this.fov), Math.log(fovT), expK(dtSim, 0.9)));
     view.camera.fov = this.fov;
 

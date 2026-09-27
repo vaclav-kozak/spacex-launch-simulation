@@ -103,7 +103,18 @@ function boosterShot(snap: SimSnapshot, evT: EvT): Shot {
   }
 }
 
-function secondStageShot(snap: SimSnapshot, evT: EvT): Shot {
+/** Scene facts the director can't read from the snapshot. */
+export interface DirectorOpts {
+  /** night preset: the upper stage is in the Earth's shadow, so after SECO the bell is lit only by its own glow */
+  night?: boolean;
+}
+
+/** Seconds after SECO to stay on the engine cam. At night the bell is lit only by its own glow: the MVac
+ * extension cools from ~1480 K to ~1100 K (no longer visible at the onboard exposure) in ~7 s, so cut then,
+ * before auto-exposure lifts the black frame. In daylight the sunlit bell stays readable a little longer. */
+const POST_SECO_HOLD = { day: 13, night: 7.5 };
+
+function secondStageShot(snap: SimSnapshot, evT: EvT, opts: DirectorOpts): Shot {
   const t = snap.t;
   const s2 = snap.bodies.S2;
   const seco = evT('SECO');
@@ -112,7 +123,7 @@ function secondStageShot(snap: SimSnapshot, evT: EvT): Shot {
   if (snap.bodies.PAYLOAD.status === 'deployed' || (deploy !== undefined && secoDone && t > deploy - 4)) return chase;
   // after SECO: stay on the engine cam while the extension visibly cools (~1480 K -> dull red in
   // ~8 s), then cut away before auto-exposure lifts the dark, unlit bell to a grey ball
-  if (secoDone) return t - seco! < 13 ? { mode: 'onboard_engine' } : chase;
+  if (secoDone) return t - seco! < (opts.night ? POST_SECO_HOLD.night : POST_SECO_HOLD.day) ? { mode: 'onboard_engine' } : chase;
   const fs = evT('FAIRING_SEP');
   if (fs !== undefined && t > fs - 4 && t < fs + 10) return chase;
   const ses = evT('SES1');
@@ -130,11 +141,11 @@ function replayShot(snap: SimSnapshot, evT: EvT): Shot {
   return { mode: 'cinematic', preset: 'ship_orbit' };
 }
 
-export function directorShot(key: StoryKey, snap: SimSnapshot, evT: EvT): Shot {
+export function directorShot(key: StoryKey, snap: SimSnapshot, evT: EvT, opts: DirectorOpts = {}): Shot {
   switch (key) {
     case 'REPLAY': return replayShot(snap, evT);
     case 'S1': return snap.bodies.S2.status === 'stacked' ? stackShot(snap, evT) : boosterShot(snap, evT);
-    case 'S2': return secondStageShot(snap, evT);
+    case 'S2': return secondStageShot(snap, evT, opts);
     case 'FAIRING': return snap.t - (evT('FAIRING_SEP') ?? snap.t) < 40 ? chase : { mode: 'cinematic', preset: 'dolly' };
   }
 }

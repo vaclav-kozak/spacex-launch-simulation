@@ -6,3 +6,4 @@ shots/
 tools/audio/.venv
 __pycache__/
 *.blend1
+.cache/

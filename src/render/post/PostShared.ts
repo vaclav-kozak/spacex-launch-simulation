@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
 import { FS_VERT } from './shaders/common';
 import {
-  LINEAR_DEPTH_FRAG, BLOOM_DOWN_FRAG, BLOOM_UP_FRAG, HIST_FRAG, ADAPT_FRAG, FLARE_FRAG, DIRT_FRAG, DOF_FRAG,
+  LINEAR_DEPTH_FRAG, BLOOM_DOWN_FRAG, BLOOM_UP_FRAG, HIST_FRAG, ADAPT_FRAG, GHOST_COLS_FRAG, GHOST_REDUCE_FRAG, DIRT_FRAG, DOF_FRAG,
 } from './shaders/passes';
 import { COMPOSITE_FRAG, MAX_HAZE } from './shaders/composite';
 import { FINAL_FRAG } from './shaders/final';
@@ -15,6 +15,8 @@ import {
 } from './shaders/smaa';
 
 export const BLOOM_LEVELS = 6;
+/** max columns of the lens-ghost statistics pass (the mip it reads is picked to fit) */
+export const GHOST_COLS = 128;
 /** exposure histogram range (log2 scene luminance): moonless night sky .. sun-lit plume */
 export const HIST_MIN_LOG = -20;
 export const HIST_LOG_RANGE = 32;
@@ -66,12 +68,14 @@ export class PostShared {
   dof: THREE.WebGLRenderTarget | null = null;
   down: THREE.WebGLRenderTarget[] = [];
   up: THREE.WebGLRenderTarget[] = [];
-  flare!: THREE.WebGLRenderTarget;
   ldr!: THREE.WebGLRenderTarget;
   edges!: THREE.WebGLRenderTarget;
   weights!: THREE.WebGLRenderTarget;
   aa!: THREE.WebGLRenderTarget;
   readonly hist: THREE.WebGLRenderTarget;
+  /** lens-ghost source statistics: per-column partial sums (GHOST_COLS x 2) and the 2x1 result */
+  readonly ghostCols: THREE.WebGLRenderTarget;
+  readonly ghost: THREE.WebGLRenderTarget;
   // static textures
   readonly dirt: THREE.WebGLRenderTarget;
   private dirtReady = false;
@@ -81,7 +85,7 @@ export class PostShared {
 
   readonly m: {
     depth: THREE.ShaderMaterial; down: THREE.ShaderMaterial; up: THREE.ShaderMaterial;
-    hist: THREE.ShaderMaterial; adapt: THREE.ShaderMaterial; flare: THREE.ShaderMaterial;
+    hist: THREE.ShaderMaterial; adapt: THREE.ShaderMaterial; ghostCols: THREE.ShaderMaterial; ghostReduce: THREE.ShaderMaterial;
     dirt: THREE.ShaderMaterial; dof: THREE.ShaderMaterial; composite: THREE.ShaderMaterial;
     final: THREE.ShaderMaterial; edges: THREE.ShaderMaterial; weightsLo: THREE.ShaderMaterial;
     weightsHi: THREE.ShaderMaterial; blend: THREE.ShaderMaterial;
@@ -94,7 +98,10 @@ export class PostShared {
     this.quad = new THREE.Mesh(g);
     this.quad.frustumCulled = false;
 
-    this.hist = target(65, 8, { type: THREE.FloatType, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
+    const stat = { type: THREE.FloatType, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter };
+    this.hist = target(65, 8, stat);
+    this.ghostCols = target(GHOST_COLS, 2, stat);
+    this.ghost = target(2, 1, stat);
     this.dirt = target(1024, 1024, {
       type: THREE.UnsignedByteType, generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter,
     });
@@ -114,11 +121,12 @@ export class PostShared {
         uManualL: f(), uSun: v4(), tBloom: t(), uBloomX: v4(), tDepth: t(), uDepthX: v4(), uSkyDepth: f(3e5),
         uAspect: f(1), uSubjOverride: f(0), uSubjHint: f(0),
       }),
-      flare: mat(FLARE_FRAG, { tSrc: t(), uSrc: v4(), tExp: t(), uAspect: f(1), uThreshold: f(6), uSunMask: v4() }),
+      ghostCols: mat(GHOST_COLS_FRAG, { tSrc: t(), uSize: { value: new THREE.Vector2() }, tExp: t(), uAspect: f(1), uThreshold: f(4), uSunMask: v4() }),
+      ghostReduce: mat(GHOST_REDUCE_FRAG, { tCols: t(), uCols: { value: 1 } }),
       dirt: mat(DIRT_FRAG, {}),
       dof: mat(DOF_FRAG, { tSrc: t(), tDepth: t(), uX: v4(), uTexel: v2(), uCoc: v4() }),
       composite: mat(COMPOSITE_FRAG, {
-        tScene: t(), tDepth: t(), uSceneX: v4(), uScenePx: v2(), tBloom: t(), uBloomX: v4(), tFlare: t(), uFlareX: v4(),
+        tScene: t(), tDepth: t(), uSceneX: v4(), uScenePx: v2(), tBloom: t(), uBloomX: v4(), tGhost: t(), uGhost: v4(),
         tDirt: t(), uDirtX: v4(), tExp: t(), uAspect: f(1), uTime: f(), uFrame: f(), uBloom: v4(),
         uHazeCount: { value: 0 },
         uHazeA: { value: Array.from({ length: MAX_HAZE }, () => new THREE.Vector4()) },
@@ -213,7 +221,6 @@ export class PostShared {
       this.down.push(target(w, h));
       if (i < BLOOM_LEVELS - 1) this.up.push(target(w, h));
     }
-    this.flare = target(this.down[2].width, this.down[2].height);
     const ldr = { type: THREE.UnsignedByteType };
     this.ldr = target(W, H, ldr);
     this.edges = target(W, H, { ...ldr, format: THREE.RGFormat });
@@ -317,7 +324,7 @@ export class PostShared {
   private disposeSized(): void {
     if (!this.scene) return;
     this.scene.depthTexture?.dispose();
-    for (const rt of [this.scene, this.linDepth, this.flare, this.ldr, this.edges, this.weights, this.aa, ...this.down, ...this.up]) rt.dispose();
+    for (const rt of [this.scene, this.linDepth, this.ldr, this.edges, this.weights, this.aa, ...this.down, ...this.up]) rt.dispose();
     this.dof?.dispose();
     this.dof = null;
     this.down = [];
@@ -331,6 +338,8 @@ export class PostShared {
     this.W = this.H = 0;
     this.msaa = 0;
     this.hist.dispose();
+    this.ghostCols.dispose();
+    this.ghost.dispose();
     this.dirt.dispose();
     this.areaTex.dispose();
     this.searchTex.dispose();

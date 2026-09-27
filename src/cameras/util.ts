@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { PAD_ELEVATION, LAUNCH_AZIMUTH_DEG } from '../core/constants';
 import { altitudeOf, upAt, enuAt } from '../core/frames';
 import type { BodyId, SimSnapshot } from '../core/types';
-import { F9 } from '../core/vehicleSpec';
+import { F9, MERLIN_1D } from '../core/vehicleSpec';
 
 export const RAD = Math.PI / 180;
 
@@ -164,6 +164,38 @@ export function plumeLength(snap: SimSnapshot, id: BodyId): number {
   const base = id === 'S1' ? 45 : 20;
   // plume expands enormously as ambient pressure drops (but becomes faint in vacuum for MVac)
   return base * (1 + 5 * (1 - p) * (id === 'S1' ? 1 : 0.3));
+}
+
+/** Expanded exhaust-plume boundary: R(a) = Rc + tanT * L * (((a + a0) / L)^p - (a0 / L)^p). */
+export interface PlumeBoundary { L: number; Rc: number; tanT: number; p: number; a0: number }
+
+/**
+ * Visible boundary of vfx's plume volume for a burning stage (same shape law and constants as `PlumeVolume` /
+ * `plumeRadiusAt` in render/vfx/plume.ts, restated here because cameras only depend on core; keep in sync).
+ * Ascent only (no retro cushion). Null when the engines are off or the stage is stacked under another.
+ */
+export function plumeBoundary(snap: SimSnapshot, id: BodyId, out: PlumeBoundary): PlumeBoundary | null {
+  if (id !== 'S1' && id !== 'S2') return null;
+  const b = snap.bodies[id];
+  if (!(b.thrust > 1) || (id === 'S2' && isStacked(snap))) return null;
+  const vac = id === 'S2';
+  const pA = Math.max(b.ambientPressure, 1e-4);
+  const e = clamp(Math.log10((vac ? 650 : 72_000) / pA), -0.3, 6.5); // expansion level log10(pExit / pAmb)
+  const ex = smoothstep(0.15, vac ? 2.6 : 3.4, e);
+  out.Rc = vac ? F9.s2.mvac.exitRadius : F9.s1.engineRingRadius + F9.s1.nozzleExitRadius;
+  out.tanT = vac ? 0.35 + 1.3 * ex : 0.055 + 1.75 * Math.pow(ex, 1.35);
+  const mass = clamp(b.thrust / MERLIN_1D.thrustSL, 0.45, 9);
+  out.L = vac ? 60 + 900 * ex : (70 + 2400 * Math.pow(ex, 1.6)) * (0.45 + 0.55 * Math.sqrt(mass / 9));
+  out.p = 1 - 0.38 * smoothstep(1.0, 3.2, e);
+  out.a0 = out.p < 0.999 ? Math.min(out.L, out.L * Math.pow(2.75 / (out.p * out.tanT), 1 / (out.p - 1))) : 0;
+  return out;
+}
+
+/** Plume radius at axial distance `a` aft of the nozzle-exit plane (cluster radius upstream of it). */
+export function plumeRadius(pb: PlumeBoundary, a: number): number {
+  const L = Math.max(pb.L, 1);
+  const x = clamp(a, 0, 4 * L);
+  return pb.Rc + pb.tanT * L * (Math.pow((x + pb.a0) / L, pb.p) - Math.pow(pb.a0 / L, pb.p));
 }
 
 /** Stable "travel" horizontal direction for chase framing (never degenerate). */

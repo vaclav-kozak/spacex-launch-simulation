@@ -11,7 +11,7 @@ Extras:
   it directly: `exposureBias` (EV, added to `ctx.lighting.exposureBias`), `autoExposure` / `manualEV`,
   `toneMapper` `'agx' | 'aces' | 'neutral'`, `bloom`, `dirt`, `flares`, `flareStrength`, `grain`, `vignette`,
   `chromaticAberration`, `motionBlur`, `heatHaze`, `shimmer`, `lensDistortion`,
-  `dof { enabled, autoFocus, focusDistance (m), fStop }`, `debug` (`depth|bloom|exposure|haze|dirt|flare`).
+  `dof { enabled, autoFocus, focusDistance (m), fStop }`, `debug` (`depth|bloom|exposure|haze|dirt|flare`; `flare` = lens-ghost layer x8).
 * Instance helpers: `setExposureBias(ev)`, `setToneMapper(t)`, `setGrain(on|k)`, `setVignette(on|k)`,
   `setFlares(on)`, `setMotionBlur(on)`, `setDOF(partial)`, `resetExposure()`, `readExposure()` (debug, sync readback).
 * `PostPipeline.profiler` (assign a `GpuTimer` from `GpuTimer.ts`) gives GPU ms for 'scene' and 'post',
@@ -30,8 +30,9 @@ Extras:
 4. Optional DOF, then a 6-level 13-tap bloom (Karis on the first level, soft knee at `bloomKnee` exposed
    units with a log tail), a 64-bin x 8-row histogram (+ a 65th subject-statistics column) of a ~64 px
    mip, and 1x1 temporal adaptation (see Exposure).
-5. Screen-space ghosts, then composite: heat haze, long-lens shimmer, camera motion blur, mesopic night
-   look, exposure, local highlight compression, bloom + lens dirt, sun glare/ghosts/star, AgX, sRGB and dither.
+5. Lens-ghost source statistics (see Lens ghosts), then composite: heat haze, long-lens shimmer, camera motion
+   blur, mesopic night look, exposure, local highlight compression, bloom + lens dirt, lens ghosts, sun
+   glare/ghosts/star, AgX, sRGB and dither.
 6. SMAA (q1+), then the final pass to the canvas: barrel distortion, chromatic aberration (q1+), sharpen,
    look, vignette, grain and `view.alpha`.
 
@@ -71,6 +72,38 @@ sunlit white ~2^1, plume-lit smoke at the pad 2^2..2^4.5, plume core 2^6+. Post 
   toward a rod-weighted luminance with a slight blue shift (Purkinje). Flood-/plume-lit areas keep colour.
 * The adaptation texture is per view (split views meter independently); the histogram target is pooled,
   so `readExposure()` is the per-view debug readout, not the histogram.
+
+## Lens ghosts (round 3; replaces the screen-space ghost pass)
+The old pass mirrored the whole bright image through the centre. A big plume came back as an orange disc
+several hundred px wide, and its dark core showed as a hole. Now the ghosts are analytic:
+* `GHOST_COLS_FRAG` + `GHOST_REDUCE_FRAG` (`shaders/passes.ts`) reduce the first bloom level with width ≤ 128
+  to a 2x1 float texture: exposed flux F above `GHOST.threshold` (4 exposed units), its flux-weighted centroid,
+  RMS spread σ (uv-y units, aspect-corrected) and mean colour. That is 2 tiny passes.
+* The composite (`lensGhosts()`) draws 5 ghosts along the line through the optical centre, at
+  centroid x {-0.42, -0.86, 0.38, -1.32, -0.16}. Each is a defocused aperture image (hex/round blend, filled
+  discs or thin rings) with a radius proportional to the source spread (0.2–0.75 σ√2, min 0.002). They are faint
+  coating tints (green/violet/amber/blue/warm) mixed 55% toward the source colour. Brightness is reflectance ×
+  flux / ghost area, soft-capped at `GHOST.cap`, so a small source gives small, brighter ghosts. None has a dark
+  centre.
+* **Broad sources get no ghosts:** they fade out as σ goes from `spread0` 0.03 to `spread1` 0.075. This covers
+  the chase plume at max-Q, the S2 chase plume (σ ~0.09) and the pad floodlight fields. Compact night
+  plumes / engine glows get faint rings. The sun is masked out of the statistics (it has its own analytic ghosts).
+* Gain `GHOST.gain` 1.2e-3 × `flareStrength` × lens profile `flare`. `debug=flare` shows the ghost layer x8.
+* **The orange crescent near the nose (max-Q chase, twilight/night; `shots/pc3/after/tw_mq.png`,
+  `ni_mq.png`) is not a post ghost.** It stays with ghosts off and goes away when the VFX plume PointLights are
+  hidden. It is the fairing base annulus (r 1.83–2.6 m, facing aft) lit by the **unshadowed** plume point light
+  ~70 m below it. The S1/S2 body should shadow it completely. Request to **vfx/models** below.
+
+## Heat haze near clip (round 3)
+`projectHaze` clips each capsule to the part whose axis lies at least one local radius (and 1.5x near) in front of
+the camera. Both constraints are linear along the segment. Before, a capsule reaching past the camera plane was cut
+at 1.5x near and projected to a screen-filling capsule. Its noise cell size (∝ projected radius) was then a
+few huge swirls. The composite now interpolates depth and world radius perspective-correctly (1/z linear in screen
+space; projected radius is already linear). It caps the turbulence cell and displacement radius at 0.12 uv-y, and
+takes the strength at each clipped end from `uHazeC.x/.w` (1 → 0.45 along the capsule). The flow is a constant 2.2
+radii/s. Test: `post-test.html?modes=onboard_engine&debug=haze` (camera beside the plume looking down it,
+`shots/pc3/haze/before_dbg.png` vs `after_dbg.png`). **vfx:** `fadeHazeForView`'s depth fade for capsules crossing
+the camera plane is no longer needed. Keep the distance fade if you like it.
 
 ## Contracts for other areas (please read)
 * **`ctx.sceneDepth.resolution` is the pool texture size, not the viewport size** (the pool is shared by
@@ -118,3 +151,10 @@ Photo-mode DOF adds about 3 ms.
   set `PostPipeline.settings.viewAlpha = false` (post then draws opaque and the div does the fade).
 * App / Quality: nothing required. Photo mode already bumps post to q3 internally.
 * vfx: `uViewH` (see above) and `layers.enable(LAYER_VFX)` on any three lights that lit VFX materials rely on.
+* **vfx / models (round 3): plume light leaks through the vehicle.** The top plume PointLight (main flame) is
+  unshadowed. It lights aft-facing surfaces above the engines: the fairing base annulus shows as a bright orange
+  crescent at the nose in every chase at twilight/night (max-Q, T+130). Options: (a) vfx: light the vehicle with a
+  shadow-casting light for the main flame only (one cube or a 90° spot shadow looking up the stack; the stack is
+  thin, so a 512² map is enough); (b) models: an analytic occlusion term in the vehicle materials for plume lights
+  (cylinder of r 1.83 m along the stage axis between the light and the fragment: attenuate when the segment
+  passes within the body radius). (b) is cheap and exact for the stack.

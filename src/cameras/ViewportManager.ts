@@ -504,7 +504,7 @@ export class ViewportManager {
       return;
     }
     if (now < v.lockUntil) return;
-    const shot = directorShot(v.key, snap, this.evT);
+    const shot = directorShot(v.key, snap, this.evT, { night: this.ctx.settings.timeOfDay === 'night' });
     const mode = this.resolveMode(v.view.focus, shot.mode);
     const key = `${mode}:${shot.preset ?? ''}`;
     if (key === v.shotKey) return;

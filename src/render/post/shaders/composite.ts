@@ -84,19 +84,19 @@ uniform vec4 uSceneX;       // region transform of scene/depth
 uniform vec2 uScenePx;      // valid size in px
 uniform sampler2D tBloom;
 uniform vec4 uBloomX;
-uniform sampler2D tFlare;
-uniform vec4 uFlareX;
+uniform sampler2D tGhost;   // 2x1 ghost source statistics (GHOST_REDUCE_FRAG)
+uniform vec4 uGhost;        // gain (0 = off), spread where ghosts start to fade / are gone (frame-height units), cap
 uniform sampler2D tDirt;
 uniform vec4 uDirtX;        // dirt uv = vUv * xy + zw
 uniform sampler2D tExp;
 uniform float uAspect;
 uniform float uTime;
 uniform float uFrame;
-uniform vec4 uBloom;        // strength, dirt, flareOn, flareGain
+uniform vec4 uBloom;        // strength, dirt, _, _
 uniform int uHazeCount;
 uniform vec4 uHazeA[MAX_HAZE];  // uv start.xy, uv end.zw
 uniform vec4 uHazeB[MAX_HAZE];  // radius start/end (uv-y), depth start/end (m)
-uniform vec4 uHazeC[MAX_HAZE];  // strength, world radius start/end, flow (radii/s)
+uniform vec4 uHazeC[MAX_HAZE];  // strength at start, world radius start/end, strength at end
 uniform vec4 uShimmer;      // amount, near fade (m), far (m), _
 uniform vec4 uMB;           // on, samples, max length (uv-y), shutter scale
 uniform mat4 uReproj;
@@ -129,23 +129,28 @@ vec2 hazeOffset(vec2 uv, float depth, out float mask) {
     float bb = max(dot(ba, ba), 1e-12);
     float h = clamp(dot(pa, ba) / bb, 0.0, 1.0);
     float dist = length(pa - ba * h);
+    // projected radius is linear in screen space; depth and world radius are perspective-correct (1/z linear)
     float r = max(mix(B.x, B.y, h), 1e-5);
     if (dist > r) continue;
-    float zc = mix(B.z, B.w, h);
-    float rw = mix(C.y, C.z, h);
+    float iz = mix(1.0 / B.z, 1.0 / B.w, h);
+    float zc = 1.0 / iz;
+    float rw = mix(C.y / B.z, C.z / B.w, h) * zc;
     // only distort what lies behind the hot gas
     float behind = smoothstep(zc - rw, zc + rw * 0.25, depth);
     float m = 1.0 - smoothstep(0.2, 1.0, dist / r);
-    m *= m * behind * C.x * (1.0 - 0.55 * h);
+    m *= m * behind * mix(C.x, C.w, h);
     if (m <= 0.0) continue;
     vec2 dir = ba * inversesqrt(bb);
     vec2 perp = vec2(-dir.y, dir.x);
-    vec2 q = vec2(dot(pa, dir), dot(pa, perp)) / r;
-    q.x -= uTime * C.w;
+    // turbulence cell size follows the capsule radius, capped so a capsule close to the lens stays a fine
+    // shimmer instead of a few screen-sized swirls
+    float rn = min(r, 0.12);
+    vec2 q = vec2(dot(pa, dir), dot(pa, perp)) / rn;
+    q.x -= uTime * 2.2 * r / rn;  // flow ~2.2 capsule radii per second
     float s = float(i) * 13.7;
     vec2 n = vec2(gnoise(q * vec2(1.3, 2.2) + s) + 0.5 * gnoise(q * vec2(3.1, 5.0) + s + 7.1),
                   gnoise(q * vec2(1.3, 2.2) + s + 31.3) + 0.5 * gnoise(q * vec2(3.1, 5.0) + s + 53.9));
-    vec2 d = (n.x * perp + n.y * dir) * r * 0.09 * m;
+    vec2 d = (n.x * perp + n.y * dir) * rn * 0.09 * m;
     off += d;
     mask = max(mask, m);
   }
@@ -202,6 +207,46 @@ float sdHex(vec2 p, float r) {
   p -= 2.0 * min(dot(k.xy, p), 0.0) * k.xy;
   p -= vec2(clamp(p.x, -k.z * r, k.z * r), r);
   return length(p) * sign(p.y);
+}
+
+// Lens ghosts of the dominant COMPACT highlight (a distant plume core, a lamp). Each ghost is a
+// defocused image of the aperture at centroid * k on the line through the optical centre (k < 0:
+// mirrored through it): soft rounded-hexagon discs and thin rings, coating-tinted, each smaller than
+// the source. Brightness = reflected share of the source flux spread over the ghost's area, faded
+// out for broad sources (a plume filling the frame makes no visible ghosts) and soft-capped so a
+// ghost stays a faint tint however hot the source is.
+vec3 lensGhosts(vec2 p) {
+  vec4 g0 = texelFetch(tGhost, ivec2(0, 0), 0);
+  float F = g0.x;
+  if (!(F > 1e-7) || !(F < 1e6)) return vec3(0.0);
+  float compact = 1.0 - smoothstep(uGhost.y, uGhost.z, g0.w);
+  if (compact <= 0.0) return vec3(0.0);
+  vec4 g1 = texelFetch(tGhost, ivec2(1, 0), 0);
+  vec3 src = max(g1.rgb, vec3(0.0));
+  src = mix(vec3(1.0), src / max(luma(src), 1e-4), 0.55);
+  vec2 c = g0.yz;
+  float srcR = max(g0.w * 1.41421, 0.008); // rms radius -> radius of an equivalent disc
+  const mat2 ROT = mat2(0.966, 0.259, -0.259, 0.966);
+  float K[5] = float[](-0.42, -0.86, 0.38, -1.32, -0.16);
+  float S[5] = float[](0.42, 0.75, 0.28, 0.6, 0.2);    // ghost radius / source radius
+  float FILL[5] = float[](0.85, 0.15, 0.9, 0.25, 1.0); // filled disc share (rest = thin ring)
+  float RR[5] = float[](1.0, 0.55, 0.7, 0.35, 0.8);    // relative reflectance
+  vec3 TT[5] = vec3[](vec3(0.55, 1.0, 0.7), vec3(0.8, 0.6, 1.0), vec3(1.0, 0.8, 0.55), vec3(0.55, 0.75, 1.0), vec3(1.0, 0.95, 0.85));
+  vec3 acc = vec3(0.0);
+  for (int i = 0; i < 5; i++) {
+    float r = srcR * S[i] + 0.002;
+    vec2 d = p - c * K[i];
+    float dl = length(d);
+    if (dl > r * 1.35) continue;
+    float sd = mix(dl - r, sdHex(ROT * d, r * 0.95), 0.6);
+    float disc = 1.0 - smoothstep(-r * 0.3, r * 0.08, sd);
+    float rim = exp(-(sd * sd) / (r * r * 0.012));
+    float shape = disc * FILL[i] + rim * (1.0 - FILL[i]) * 1.8;
+    acc += TT[i] * (shape * RR[i] / (3.14159 * r * r));
+  }
+  acc *= src * (F * uGhost.x * compact);
+  float l = luma(acc);
+  return l > 0.0 ? acc * (uGhost.w * (1.0 - exp(-l / uGhost.w)) / l) : acc;
 }
 
 // analytic sun lens effects: faint aperture-shaped ghosts along the optical axis, a soft glare
@@ -281,9 +326,10 @@ void main() {
     col *= exp2(off);
   }
   col = mix(col, bloom * exposure, uBloom.x) + bloom * exposure * dirt * uBloom.y;
-  if (uBloom.z > 0.5) {
-    vec3 fl = texture2D(tFlare, rgn(uv, uFlareX)).rgb * uBloom.w;
-    col += fl * (0.6 + dirt * 3.0);
+  vec3 ghosts = vec3(0.0);
+  if (uGhost.x > 0.0) {
+    ghosts = lensGhosts((uv - 0.5) * vec2(uAspect, 1.0));
+    col += ghosts * (1.0 + dirt * 1.5);
   }
   if (uSun.z > 0.5) {
     float disp = uSun.w * (1.0 - exp(-E.b * exposure / 30.0));
@@ -303,7 +349,7 @@ void main() {
   else if (uDebug == 3) outc = vec3(clamp((E.r + 8.0) / 16.0, 0.0, 1.0), exposure > 1.0 ? 1.0 : exposure, 0.0);
   else if (uDebug == 4) outc = vec3(abs(off) * 150.0, hazeMask);
   else if (uDebug == 5) outc = dirt;
-  else if (uDebug == 6) outc = texture2D(tFlare, rgn(uv, uFlareX)).rgb;
+  else if (uDebug == 6) outc = tonemapAgX(ghosts * 8.0, vec3(1.0));
 
   outc = linearToSrgb(outc);
   // triangular dither before 8-bit quantization

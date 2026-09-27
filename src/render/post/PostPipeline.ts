@@ -4,14 +4,14 @@
 //   log depth -> linear view depth (R32F)  == ctx.sceneDepth while LAYER_VFX renders
 //   VFX (LAYER_VFX) into the same HDR target, depth-tested against the opaque depth
 //   [photo DOF] -> bloom mip chain -> histogram auto-exposure (per view, temporal)
-//   -> screen-space ghosts -> composite (haze/shimmer, motion blur, bloom+dirt, flares, AgX)
+//   -> lens-ghost source stats -> composite (haze/shimmer, motion blur, bloom+dirt, flares, AgX)
 //   -> SMAA -> final (lens distortion, CA, sharpen/soften, vignette, grain, alpha) into view.rect
 //
 // All transient targets are pooled (PostShared) and shared by every viewport; each view renders
 // into a (0,0,w,h) sub-region so animated tiling rects never reallocate anything.
 import * as THREE from 'three';
 import { LAYER_DEFAULT, LAYER_VFX, type AppContext, type ViewInfo } from '../../core/context';
-import { PostShared, BLOOM_LEVELS } from './PostShared';
+import { PostShared, BLOOM_LEVELS, GHOST_COLS } from './PostShared';
 import { MAX_HAZE } from './shaders/composite';
 import { envLook } from '../env/look';
 import { ATMO } from '../env/atmosphere';
@@ -112,6 +112,11 @@ function meterFor(view: ViewInfo): Meter {
 const TONEMAP_ID: Record<ToneMapper, number> = { agx: 0, aces: 1, neutral: 2 };
 const DEBUG_ID: Record<PostSettings['debug'], number> = { none: 0, depth: 1, bloom: 2, exposure: 3, haze: 4, dirt: 5, flare: 6 };
 const SUN_ANG_RADIUS = 0.00465;
+/** Lens ghosts of compact highlights (see lensGhosts in composite.ts). threshold: exposed luminance
+ * (averaged over ~16 px) where a highlight starts to make ghosts; gain: reflected share of the flux per
+ * ghost (~1e-3, a coated double reflection); spread0/1: rms source radius (frame heights) where ghosts
+ * start to fade / are gone (big plumes make none); cap: max exposed luminance of a ghost (faint). */
+const GHOST = { threshold: 4, gain: 1.2e-3, spread0: 0.03, spread1: 0.075, cap: 0.035 };
 
 // scratch
 const _v3a = new THREE.Vector3();
@@ -127,7 +132,7 @@ const _scl = new THREE.Vector2();
 const _maxUv = new THREE.Vector2();
 const _key = new THREE.Vector4();
 
-interface HazeCand { ax: number; ay: number; bx: number; by: number; ra: number; rb: number; za: number; zb: number; s: number; rwa: number; rwb: number; score: number }
+interface HazeCand { ax: number; ay: number; bx: number; by: number; ra: number; rb: number; za: number; zb: number; sa: number; sb: number; rwa: number; rwb: number; score: number }
 
 export class PostPipeline {
   /** shared settings for every viewport (photo mode UI writes here) */
@@ -154,6 +159,8 @@ export class PostPipeline {
   private prevMode = '';
   private prevFocus: string | null = null;
   private hazeCands: HazeCand[] = [];
+  private hzA = new THREE.Vector3(); private hzB = new THREE.Vector3(); private hzT = new THREE.Vector3();
+  private hzPA = new THREE.Vector4(); private hzPB = new THREE.Vector4();
   private x = { scene: new THREE.Vector4(), a: new THREE.Vector4(), b: new THREE.Vector4() };
 
   constructor(private ctx: AppContext) {
@@ -396,19 +403,24 @@ export class PostPipeline {
     const expTex = this.exp[this.expRead].texture;
     const lens = lensFor(view);
 
-    // screen-space ghosts from clipped highlights (night plume etc.)
+    // lens ghosts: flux / centroid / spread of the clipped highlights in a small mip (2 tiny passes);
+    // the composite draws the ghost discs analytically from that
     const flaresOn = set.flares && Q.flares;
     if (flaresOn) {
-      const u = S.m.flare.uniforms;
-      const srcI = Math.min(3, levels - 2);
-      const src = S.up[srcI];
-      u.tSrc.value = src.texture;
-      PostShared.xf(src, dims[srcI][0], dims[srcI][1], u.uSrc.value as THREE.Vector4);
+      let gi = BLOOM_LEVELS - 1;
+      for (let i = 1; i < BLOOM_LEVELS; i++) if (dims[i][0] <= GHOST_COLS) { gi = i; break; }
+      const u = S.m.ghostCols.uniforms;
+      u.tSrc.value = S.down[gi].texture;
+      (u.uSize.value as THREE.Vector2).set(dims[gi][0], dims[gi][1]);
       u.tExp.value = expTex;
       u.uAspect.value = aspect;
-      u.uThreshold.value = 5.0;
+      u.uThreshold.value = GHOST.threshold;
       (u.uSunMask.value as THREE.Vector4).set(sun.uvx, sun.uvy, sun.radius, sun.on ? 1 : 0);
-      S.pass(S.m.flare, S.flare, dims[2][0], dims[2][1]);
+      S.pass(S.m.ghostCols, S.ghostCols, dims[gi][0], 2);
+      const ru = S.m.ghostReduce.uniforms;
+      ru.tCols.value = S.ghostCols.texture;
+      ru.uCols.value = dims[gi][0];
+      S.pass(S.m.ghostReduce, S.ghost, 2, 1);
     }
 
     if (PostPipeline.profileDetail) { prof?.end(); prof?.begin('comp'); }
@@ -421,8 +433,8 @@ export class PostPipeline {
       (u.uScenePx.value as THREE.Vector2).set(w, h);
       u.tBloom.value = S.up[0].texture;
       PostShared.xf(S.up[0], dims[0][0], dims[0][1], u.uBloomX.value as THREE.Vector4);
-      u.tFlare.value = S.flare.texture;
-      PostShared.xf(S.flare, dims[2][0], dims[2][1], u.uFlareX.value as THREE.Vector4);
+      u.tGhost.value = S.ghost.texture;
+      (u.uGhost.value as THREE.Vector4).set(flaresOn ? GHOST.gain * set.flareStrength * lens.flare : 0, GHOST.spread0, GHOST.spread1, GHOST.cap);
       u.tDirt.value = S.dirt.texture;
       this.dirtXf(view, aspect, u.uDirtX.value as THREE.Vector4);
       u.tExp.value = expTex;
@@ -430,7 +442,7 @@ export class PostPipeline {
       u.uTime.value = this.fxTime;
       u.uFrame.value = photo ? 0 : this.frame;
       const bloomK = 0.04 * set.bloom * lens.bloom;
-      (u.uBloom.value as THREE.Vector4).set(bloomK, bloomK * 5.0 * set.dirt * lens.dirt, flaresOn ? 1 : 0, 0.0018 * set.flareStrength * lens.flare);
+      (u.uBloom.value as THREE.Vector4).set(bloomK, bloomK * 5.0 * set.dirt * lens.dirt, 0, 0);
       // heat haze
       u.uHazeCount.value = set.heatHaze ? this.projectHaze(view, cam, Q.maxHaze, u) : 0;
       // long-lens shimmer
@@ -587,7 +599,13 @@ export class PostPipeline {
     out.set(sx * fx, sy * fy, 0.5 - 0.5 * sx * fx, 0.5 - 0.5 * sy * fy);
   }
 
-  /** Project ctx.hazeSources to screen capsules, keep the most significant. Returns count. */
+  /**
+   * Project ctx.hazeSources to screen capsules, keep the most significant. Returns count.
+   * Near clip: a capsule is kept only where its axis lies at least one local radius (and 1.5x the camera near
+   * plane) in front of the camera, so a plume that reaches past the camera plane is cut where it starts to wrap
+   * around the lens instead of projecting to a screen-filling capsule with a huge, flat noise scale. Strength
+   * fades along the capsule (1 -> 0.45); the clipped ends carry their own strength (uHazeC.x / .w).
+   */
   private projectHaze(view: ViewInfo, cam: THREE.PerspectiveCamera, max: number, u: Record<string, THREE.IUniform>): number {
     const src = this.ctx.hazeSources;
     if (!src || src.length === 0) return 0;
@@ -597,27 +615,39 @@ export class PostPipeline {
     const near = Math.max(cam.near, 0.05) * 1.5;
     const cands = this.hazeCands;
     cands.length = 0;
-    const a = new THREE.Vector3(), b = new THREE.Vector3(), pa = new THREE.Vector4(), pb = new THREE.Vector4();
+    const a = this.hzA, b = this.hzB, pa = this.hzPA, pb = this.hzPB;
+    const k = 1.25; // distortion region slightly wider than the hot core
     for (const hs of src) {
       if (!(hs.strength > 0.001)) continue;
       a.copy(hs.start).sub(view.camWorldPos).applyMatrix4(Vi);
       b.copy(hs.end).sub(view.camWorldPos).applyMatrix4(Vi);
-      let ra = hs.radius0, rb = hs.radius1;
-      const da0 = -a.z, db0 = -b.z;
-      if (da0 < near && db0 < near) continue;
-      if (da0 < near) { const t = (near - db0) / (da0 - db0); a.lerpVectors(b, a, t); ra = rb + (ra - rb) * t; }
-      else if (db0 < near) { const t = (near - da0) / (db0 - da0); b.lerpVectors(a, b, t); rb = ra + (rb - ra) * t; }
+      const da0 = -a.z, db0 = -b.z, ra0 = hs.radius0, rb0 = hs.radius1;
+      // keep t in [t0, t1] where depth(t) >= near and depth(t) >= radius(t) (both linear in t)
+      let t0 = 0, t1 = 1;
+      for (let c = 0; c < 2; c++) {
+        const g0 = c === 0 ? da0 - near : da0 - ra0, g1 = c === 0 ? db0 - near : db0 - rb0;
+        if (g0 < 0 && g1 < 0) { t1 = -1; break; }
+        if (g0 < 0) t0 = Math.max(t0, g0 / (g0 - g1));
+        else if (g1 < 0) t1 = Math.min(t1, g0 / (g0 - g1));
+      }
+      if (t1 - t0 < 1e-3) continue;
+      const ra = ra0 + (rb0 - ra0) * t0, rb = ra0 + (rb0 - ra0) * t1;
+      b.lerpVectors(a, b, t1);
+      a.lerp(this.hzT.copy(hs.end).sub(view.camWorldPos).applyMatrix4(Vi), t0);
       const da = -a.z, db = -b.z;
       pa.set(a.x, a.y, a.z, 1).applyMatrix4(P);
       pb.set(b.x, b.y, b.z, 1).applyMatrix4(P);
       const ax = (pa.x / pa.w) * 0.5 + 0.5, ay = (pa.y / pa.w) * 0.5 + 0.5;
       const bx = (pb.x / pb.w) * 0.5 + 0.5, by = (pb.y / pb.w) * 0.5 + 0.5;
-      const k = 1.25; // distortion region slightly wider than the hot core
       const rA = ((ra * k) * p11 * 0.5) / da, rB = ((rb * k) * p11 * 0.5) / db;
       const rmax = Math.max(rA, rB);
       if (rmax < 0.0015) continue;
       if (Math.max(ax, bx) + rmax < 0 || Math.min(ax, bx) - rmax > 1 || Math.max(ay, by) + rmax < 0 || Math.min(ay, by) - rmax > 1) continue;
-      cands.push({ ax, ay, bx, by, ra: rA, rb: rB, za: da, zb: db, s: THREE.MathUtils.clamp(hs.strength, 0, 1), rwa: ra * k, rwb: rb * k, score: hs.strength * rmax });
+      const s0 = THREE.MathUtils.clamp(hs.strength, 0, 1);
+      cands.push({
+        ax, ay, bx, by, ra: rA, rb: rB, za: da, zb: db, sa: s0 * (1 - 0.55 * t0), sb: s0 * (1 - 0.55 * t1),
+        rwa: ra * k, rwb: rb * k, score: s0 * Math.min(rmax, 0.3),
+      });
     }
     cands.sort((x, y) => y.score - x.score);
     const n = Math.min(cands.length, max, MAX_HAZE);
@@ -626,7 +656,7 @@ export class PostPipeline {
       const c = cands[i];
       A[i].set(c.ax, c.ay, c.bx, c.by);
       B[i].set(c.ra, c.rb, c.za, c.zb);
-      C[i].set(c.s, c.rwa, c.rwb, 2.2);
+      C[i].set(c.sa, c.rwa, c.rwb, c.sb);
     }
     return n;
   }
