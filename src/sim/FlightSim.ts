@@ -13,7 +13,7 @@ import { F9, OCISLY } from '../core/vehicleSpec';
 import { padHeadingDir } from '../core/frames';
 import { RigidBody } from './rigidbody';
 import { atmosphere, makeAtmo, type AtmoSample } from './atmosphere';
-import { WindModel, type GustState } from './wind';
+import { WindModel, localENU, type GustState } from './wind';
 import { SHAPES, computeAero, makeAeroOut, type AeroOut } from './aero';
 import { EngineSet } from './engines';
 import { AttitudeCtrl, GridFins, Rcs, allocateGimbal, type CtrlGains } from './control';
@@ -74,6 +74,11 @@ const _q1 = new Quaternion();
 const _slU = new Vector3();
 const _slW = new Vector3();
 const _slAero = makeAeroOut();
+const _mqE = new Vector3();
+const _mqN = new Vector3();
+const _mqU = new Vector3();
+const _mqV = new Vector3();
+const _mqEN = { e: 0, n: 0 };
 const _up = new Vector3();
 const _mp = mp();
 const _mpc = mp();
@@ -164,7 +169,8 @@ export interface Touchdown {
   prop: number;
 }
 
-interface Scheduled { t: number; id: CalloutId }
+/** delayed callout; `env`: timed on envT (keeps running while the countdown clock is held) */
+interface Scheduled { t: number; id: CalloutId; env?: boolean }
 
 export interface FlightOptions {
   presim?: boolean;
@@ -232,8 +238,14 @@ export class FlightSim {
   private towerCleared = false;
   private s1NominalSaid = false;
   private supersonic = false;
+  /** highest dynamic pressure experienced (Pa, incl. gusts) up to the MAX_Q event */
   qPeak = 0;
+  /** time of the max-Q peak (peak of the gust-free dynamic pressure trend) */
   tPeak = 0;
+  /** peak of the gust-free dynamic pressure trend (Pa) */
+  private qTrendPeak = 0;
+  private peakAlt = 0;
+  private peakMach = 0;
   maxQDone = false;
   private bucket: 'pre' | 'down' | 'done' = 'pre';
   mecoT = NaN;
@@ -385,9 +397,9 @@ export class FlightSim {
     this.emitFn(e);
   }
 
-  say(id: CalloutId, delay = 0): void {
+  say(id: CalloutId, delay = 0, env = false): void {
     if (this.presim) return;
-    if (delay > 0) { this.scheduled.push({ t: this.t + delay, id }); return; }
+    if (delay > 0) { this.scheduled.push(env ? { t: this.envT + delay, id, env } : { t: this.t + delay, id }); return; }
     if (this.seeking) return;
     const c = CALLOUTS[id];
     const e: SimEvent = { type: 'CALLOUT', t: this.t, data: { id, text: c.text, voice: c.voice } };
@@ -408,8 +420,10 @@ export class FlightSim {
       if (this.held) {
         this.ev('COUNTDOWN_HOLD');
         this.say('lc_hold');
-        this.say('lc_holding', 2.2);
+        // the mission clock is frozen while held: time this one on envT
+        this.say('lc_holding', 2.2, true);
       } else {
+        this.dropHoldCallouts();
         this.ev('COUNTDOWN_RESUME');
         this.say('lc_resume');
       }
@@ -427,7 +441,7 @@ export class FlightSim {
 
   liftoffNow(): void {
     if (this.ignited || this.aborted) return;
-    if (this.held) { this.held = false; this.ev('COUNTDOWN_RESUME'); }
+    if (this.held) { this.held = false; this.dropHoldCallouts(); this.ev('COUNTDOWN_RESUME'); }
     if (this.t < -3.05) {
       this.t = -3.05;
       while (this.scriptIdx < COUNTDOWN_SCRIPT.length && COUNTDOWN_SCRIPT[this.scriptIdx].t < this.t) this.scriptIdx++;
@@ -463,7 +477,12 @@ export class FlightSim {
 
   /** drop delayed callouts that are already in the past (after a seek) */
   dropStaleCallouts(): void {
-    this.scheduled = this.scheduled.filter((s) => s.t >= this.t - 0.5);
+    this.scheduled = this.scheduled.filter((s) => s.t >= (s.env ? this.envT : this.t) - 0.5);
+  }
+
+  /** a pending "holding the count" line is moot once the count resumes */
+  private dropHoldCallouts(): void {
+    this.scheduled = this.scheduled.filter((s) => s.id !== 'lc_holding');
   }
 
   setAutoFairing(on: boolean): void {
@@ -542,7 +561,7 @@ export class FlightSim {
     }
     if (this.scheduled.length) {
       for (let i = this.scheduled.length - 1; i >= 0; i--) {
-        if (this.scheduled[i].t <= t) {
+        if (this.scheduled[i].t <= (this.scheduled[i].env ? this.envT : t)) {
           const s = this.scheduled.splice(i, 1)[0];
           this.say(s.id);
         }
@@ -840,15 +859,35 @@ export class FlightSim {
       this.say('lc_supersonic');
     }
     if (!this.maxQDone) {
-      if (q > this.qPeak) { this.qPeak = q; this.tPeak = t; }
-      else if (v.aero.mach > 1.1 && q < this.qPeak * 0.9) {
+      // Detect the peak on the gust-free trend ½ρ|v − mean wind|² (smooth: position/velocity/density
+      // only), so the call comes ~1 s after the peak instead of waiting for a large drop through the
+      // gust noise of the flat-topped q curve. Armed once supersonic and back at full throttle (the
+      // bucket makes a local q maximum at the throttle-down). event.t = the trend peak.
+      if (q > this.qPeak) this.qPeak = q;
+      const qt = this.trendQ(v);
+      if (qt > this.qTrendPeak) { this.qTrendPeak = qt; this.tPeak = t; this.peakAlt = v.alt; this.peakMach = v.aero.mach; }
+      else if (v.aero.mach > 1.1 && t >= this.throttleProfileEnd && t - this.tPeak >= 1 && qt < this.qTrendPeak * 0.9998) {
         this.maxQDone = true;
-        this.ev('MAX_Q', 'S1', { q: this.qPeak, alt: v.alt, mach: v.aero.mach }, this.tPeak);
+        this.ev('MAX_Q', 'S1', { q: this.qPeak, alt: this.peakAlt, mach: this.peakMach }, this.tPeak);
         this.say('lc_maxq');
         this.say('host_maxq', 2.5);
       }
     }
   }
+
+  /** gust-free dynamic pressure: ½ρ|v − mean wind(h)|² (Pa) */
+  private trendQ(v: Vehicle): number {
+    const rb = v.rb;
+    _mqV.copy(rb.vel);
+    if (v.alt < 100_000) {
+      localENU(rb.pos, _mqE, _mqN, _mqU);
+      this.wind.meanEN(v.alt, _mqEN);
+      _mqV.addScaledVector(_mqE, -_mqEN.e).addScaledVector(_mqN, -_mqEN.n);
+    }
+    return 0.5 * v.atmo.rho * _mqV.lengthSq();
+  }
+
+  private readonly throttleProfileEnd = GNC.throttleProfile[GNC.throttleProfile.length - 1][0];
 
   /** unit horizontal direction of the launch plane at p (downrange) */
   private launchHorizontal(p: Vector3, out: Vector3): Vector3 {
@@ -1644,8 +1683,7 @@ export class FlightSim {
       //    booster outweighs the thrust component, so the assist tilts the engines the other way
       //    (same physics as the autopilot's divert); near the cross-over the stick has no authority.
       //  * low: velocity command — |stick| = 1 asks for 8 m/s of drift over the deck, neutral holds
-      //    station over the deck; the assist leans (≤ 20°, ≤ 8° in the last metres) to get there.
-      const lowH = clamp((h - 3) / 60, 0, 1); // 0 at the deck … 1 above ~60 m
+      //    station over the deck; the assist leans (≤ 20°, tapering to 3.5° below ~8 m) to get there.
       const wHigh = clamp((h - 150) / 100, 0, 1);
       const vhL = vh.length();
       const aL = _lgL.set(0, 0, 0);
@@ -1670,7 +1708,8 @@ export class FlightSim {
       const aT = Math.max(3, g + Math.max(0, vDown) * 0.5);
       const aH = _lgE.copy(aL).multiplyScalar(8 / Math.max(1, aL.length())).sub(vh).multiplyScalar(1 / 1.6);
       aH.addScaledVector(nUp, -aH.dot(nUp));
-      const tiltLo = (8 + 12 * lowH) * D2R;
+      // lean cap: 20° above ~40 m, tapering to 3.5° below ~8 m (touchdown tips over at 8° tilt)
+      const tiltLo = (3.5 + 16.5 * clamp((h - 8) / 30, 0, 1)) * D2R;
       const aHl = aH.length();
       const aHmax = aT * Math.tan(tiltLo);
       if (aHl > aHmax) aH.multiplyScalar(aHmax / aHl);

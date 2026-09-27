@@ -81,7 +81,8 @@ boost-back, entry burn and the grid-fin phase down to AERO; the pilot owns the l
     target (same as the autopilot's divert), with reduced authority near the cross-over.
   - LANDING_BURN, **low** (< 150 m): velocity command — |stick| = 1 asks for 8 m/s of drift over the
     deck, neutral = hold station over the deck (kills relative drift, time constant 1.6 s). The
-    assist leans ≤ 20° (tapering to 8° at the deck) to produce that horizontal acceleration.
+    assist leans ≤ 20° above ~40 m, tapering to 3.5° below ~8 m (touchdown tips at 8°), to produce
+    that horizontal acceleration — position errors must be fixed above ~20 m.
   - Height is measured to the deck plane; > deckLength/2 + 25 m off the ship it is the sea surface.
   - Legs deploy automatically ~7 s before predicted contact.
 * Scripted "reasonable human" pilot (`scripts/simtest.ts`, `makeHumanPilot`): sees only what the
@@ -93,10 +94,10 @@ boost-back, entry burn and the grid-fin phase down to AERO; the pilot owns the l
 
   | pilot | touchdown | result |
   |---|---|---|
-  | on cue | T+8:32.2 · 0.49 m/s · 0.67 m/s hor · 5.0° · 2.5 m | landed |
-  | 1.5 s late | T+8:29.2 · 0.99 m/s · 1.3 m/s hor · 3.8° · 1.5 m | landed |
-  | 2 s early | T+8:34.4 · 2.75 m/s · 1.2 m/s hor · 5.6° · 2.9 m | landed |
-  | sea 4, wind 10, 0.45 s delay | T+8:34.5 · 3.06 m/s · 1.5 m/s hor · 5.8° · 3.2 m | landed |
+  | on cue | T+8:32.6 · 1.82 m/s · 0.05 m/s hor · 2.7° · 1.2 m | landed |
+  | 1.5 s late | T+8:29.4 · 0.85 m/s · 0.76 m/s hor · 2.7° · 0.9 m | landed |
+  | 2 s early | T+8:34.6 · 4.40 m/s · 0.64 m/s hor · 1.5° · 1.1 m | landed (stopped 1.2 m up, cut, dropped) |
+  | sea 4, wind 10, 0.45 s delay | T+8:34.7 · 4.74 m/s · 1.9 m/s hor · 2.9° · 2.5 m | landed |
   | 4 s late | T+8:19.0 · 72 m/s | hard landing → RUD |
   | no input | ocean impact 266 m/s | lost |
 
@@ -130,8 +131,9 @@ Mach-1 crossing on descent · `SPLASHDOWN {speed, dist}` · `RUD {reason, member
 (`q/aoa/normal` on aerodynamic breakups) · `MECO/STAGE_SEP {manual, …}` ·
 `FAIRING_SEP body:FAIRING_A {bodies:['FAIRING_A','FAIRING_B'], manual, q, heatFlux, damaged}` —
 **one event for the pair** (`body` stays FAIRING_A for older consumers) ·
-`THROTTLE_DOWN / THROTTLE_UP {q}` (throttle bucket) · `MAX_Q {q, alt, mach}` at the true peak (emitted
-once q has clearly dropped) ·
+`THROTTLE_DOWN / THROTTLE_UP {q}` (throttle bucket) · `MAX_Q {q, alt, mach}`: event.t = peak
+of the gust-free q trend ½ρ|v − mean wind|² (alt/mach at that time), emitted 1.0 s later (armed once
+Mach > 1.1 and past the throttle bucket); `q` = highest gusty q seen (the value the HUD showed) ·
 `PARAFOIL_DEPLOY` twice per half: `{stage:'drogue', alt≈11 km}` then `{stage:'parafoil', alt≈2.5 km}`
 (`BodyState.parafoil` ramps 0→1 over 14 s after the second) · `SECO {flameout, perigee, apogee, inc, prop}` ·
 `ORBIT {a, e, perigee, apogee, incDeg}` · `PAYLOAD_DEPLOY {damaged}` · `FLAMEOUT` ·
@@ -148,7 +150,9 @@ Others unchanged: `hard landing`, `toppled on deck`, `ocean impact`, …
 ## Callouts / audio
 
 All 71 `CALLOUT_LINES` (ids + texts) match `public/audio/callouts/manifest.json` (re-checked after
-round 2) — no new or changed lines, no clip regeneration needed. If lines change later, rerun
+round 2) — no new or changed lines, no clip regeneration needed. Countdown hold: `lc_hold`
+immediately, `lc_holding` 2.2 s later (timed on envT, since the mission clock is frozen while held;
+dropped if the count resumes first), `lc_resume` on resume. If lines change later, rerun
 `tools/audio/gen_callouts.py` (it imports `CALLOUT_LINES` directly).
 
 ## Nominal timeline (simtest, sea 3, wind 6 m/s from 300°)
@@ -157,7 +161,7 @@ round 2) — no new or changed lines, no clip regeneration needed. If lines chan
 |---|---|---|
 | throttle down / up | T+0:41 / T+1:04 | bucket through max-Q |
 | supersonic | T+1:00 | ~T+1:00 |
-| Max-Q | T+1:11 · 27.1 kPa | ~T+1:10 |
+| Max-Q | T+1:12.6 · 27.1 kPa (callout T+1:13.6) | ~T+1:10 |
 | MECO | T+2:24.8 · 2.32 km/s inertial · 63 km · fpa 30° · 26 t reserve | ~T+2:27 |
 | stage sep / SES-1 | T+2:27.8 / T+2:34.8 | +3 s / +7 s |
 | fairing sep | T+3:15 (> 110 km, 553 W/m²) | T+3:00–3:30 |
@@ -203,7 +207,7 @@ round 2) — no new or changed lines, no clip regeneration needed. If lines chan
 * MECO T+2:24.8 (~2 s early). The 26 t booster reserve (entry + landing + ~2 t margin) sets it;
   moving MECO later would cut the landing margins.
 * Max-Q 27 kPa (real webcasts ~30–35 kPa); the q-limiter (`bucketQ` 34 kPa) is a safety net only.
-  Max-Q timing ~1:09–1:11 (q is flat-topped, so the peak moves ±2 s between runs with gusts).
+  Max-Q (trend peak) T+1:12–1:13; the gusty raw q is flat-topped from ~1:08 to ~1:18.
 * Entry burn → touchdown ≈ 122 s (real ≈ 130 s). Tuning: `gammaScale` 1.025 (booster apogee
   ~130 km), `entryIgnQ` 200 Pa, entry cut window 750–1300 m/s (nominal ≈ 900), `landingReserve` 6 t,
   landing-burn planning throttle 0.72.

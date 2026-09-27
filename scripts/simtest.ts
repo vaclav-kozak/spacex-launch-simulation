@@ -111,7 +111,8 @@ function makeHumanPilot(opts: { delay?: number; ignitionLate?: number } = {}): (
         if (PILOT_LOG && lit && snap.t >= nextLog) {
           nextLog = snap.t + 1;
           const s1 = snap.bodies.S1;
-          ax.set(0, 1, 0).applyQuaternion(s1.quat);
+          // tilt relative to the deck normal (ship frame)
+          ax.set(0, 1, 0).applyQuaternion(s1.quat).applyQuaternion(q.copy(snap.bodies.SHIP.quat).invert());
           log.push(`${fmtT(snap.t)} h=${o.h.toFixed(0)} vD=${o.vDown.toFixed(1)} req=${o.req.toFixed(2)} lever=${lever.toFixed(2)} thr=${(s1.engines[0]?.throttle ?? 0).toFixed(2)} x=${o.x.toFixed(0)} z=${o.z.toFixed(0)} vx=${o.vx.toFixed(1)} vz=${o.vz.toFixed(1)} ip=${o.ipx.toFixed(0)},${o.ipz.toFixed(0)} stick=${yaw.toFixed(2)},${pitch.toFixed(2)} tilt=${(Math.acos(Math.min(1, ax.y)) * 57.3).toFixed(1)}`);
         }
         const rate = 6 * dt;
