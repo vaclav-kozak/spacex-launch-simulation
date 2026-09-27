@@ -3,8 +3,8 @@
 // W position incl. Earth shadow + reddening, air density, wind profile).
 import * as THREE from 'three';
 import type { AppContext } from '../../core/context';
-import { SUN_INTENSITY } from '../../core/context';
 import { EARTH_RADIUS } from '../../core/constants';
+import { ATMO } from '../env/atmosphere';
 
 /** Uniform objects shared (by reference) across all VFX materials. */
 export const vfxShared = {
@@ -92,10 +92,11 @@ float hgPhase(float c, float g) {
 // ---------------------------------------------------------------------------------------------
 // CPU atmosphere helpers
 
-const BR = [5.802e-6, 13.558e-6, 33.1e-6]; // Rayleigh scattering (1/m)
-const BM = 3.996e-6 * 1.11; // Mie extinction (1/m)
-const BO = [0.65e-6, 1.881e-6, 0.085e-6]; // ozone absorption (1/m)
-const R_TOP = EARTH_RADIUS + 100_000;
+// extinction coefficients: env's atmosphere (ATMO), so the per-puff / per-plume sun matches
+// env's transmittanceCPU (ctx.lighting.sunColor) and the sky
+const BR = ATMO.rayleigh; // Rayleigh (1/m)
+const BO = ATMO.ozone; // ozone absorption (1/m), RGB-band averaged
+const R_TOP = EARTH_RADIUS + ATMO.H;
 
 /** Air density (kg/m^3), simple exponential atmosphere good enough for visuals. */
 export function airDensity(alt: number): number {
@@ -108,7 +109,7 @@ export function altitudeW(x: number, y: number, z: number): number {
 }
 
 /**
- * Direct sun radiance (linear RGB, SUN_INTENSITY units) reaching W point p: Earth shadow with a
+ * Direct sun radiance (linear RGB, env units: ATMO.sunE) reaching W point p: Earth shadow with a
  * soft terminator plus Rayleigh/Mie/ozone extinction integrated along the sun ray through a
  * spherical shell atmosphere. Gives the red/golden twilight tints on high plumes.
  */
@@ -130,8 +131,10 @@ export function sunRadianceAt(px: number, py: number, pz: number, sun: THREE.Vec
     const b = r0 * mu;
     tTop = -b + Math.sqrt(Math.max(0, b * b - (r0 * r0 - R_TOP * R_TOP)));
   }
+  // column densities: Rayleigh, aerosol (background + marine boundary layer, as extinction) and
+  // the ozone tent; a grazing ray (sun near / below the local horizon) gets more samples
   let tr = 0, tm = 0, to = 0;
-  const N = 14;
+  const N = mu < 0.2 ? 28 : 12;
   let prevT = 0;
   for (let i = 1; i <= N; i++) {
     const f = i / N;
@@ -141,14 +144,14 @@ export function sunRadianceAt(px: number, py: number, pz: number, sun: THREE.Vec
     prevT = t;
     const rr = Math.sqrt(r0 * r0 + tmid * tmid + 2 * r0 * tmid * mu);
     const h = Math.max(rr - EARTH_RADIUS, 0);
-    tr += Math.exp(-h / 8000) * dt;
-    tm += Math.exp(-h / 1200) * dt;
-    to += Math.max(0, 1 - Math.abs(h - 25000) / 15000) * dt;
+    tr += Math.exp(-h / ATMO.rayleighH) * dt;
+    tm += (ATMO.mieExt * Math.exp(-h / ATMO.mieH) + ATMO.blExt * Math.exp(-h / ATMO.blH)) * dt;
+    to += Math.max(0, 1 - Math.abs(h - ATMO.ozoneCenter) / ATMO.ozoneHalfWidth) * dt;
   }
-  const k = SUN_INTENSITY * vis;
-  out.r = k * Math.exp(-(BR[0] * tr + BM * tm + BO[0] * to));
-  out.g = k * Math.exp(-(BR[1] * tr + BM * tm + BO[1] * to));
-  out.b = k * Math.exp(-(BR[2] * tr + BM * tm + BO[2] * to));
+  const k = ATMO.sunE * vis;
+  out.r = k * Math.exp(-(BR[0] * tr + tm + BO[0] * to));
+  out.g = k * Math.exp(-(BR[1] * tr + tm + BO[1] * to));
+  out.b = k * Math.exp(-(BR[2] * tr + tm + BO[2] * to));
   return out;
 }
 

@@ -5,9 +5,9 @@ import * as THREE from 'three';
 import type { AppContext, FrameModule, PlumeLight, ViewInfo } from '../../core/context';
 import { LAYER_VFX } from '../../core/context';
 import type { BodyState, EngineState, SimSnapshot } from '../../core/types';
-import { IGNITION_TIME, PAD_ELEVATION } from '../../core/constants';
+import { EARTH_RADIUS, IGNITION_TIME, PAD_ELEVATION } from '../../core/constants';
 import { F9 } from '../../core/vehicleSpec';
-import { ambientAt, airDensity, clamp01, loadNoise3D, smooth, sunRadianceAt, vfxShared, windScale } from './common';
+import { altitudeW, ambientAt, airDensity, clamp01, loadNoise3D, smooth, sunRadianceAt, vfxShared, windScale } from './common';
 import { ParticleSystem, P_THIN, type ParticleEnv } from './particles';
 import { PlumeVolume, makeDrive, plumeRadiusAt, type PlumeDrive } from './plume';
 import { Condensation } from './condensation';
@@ -17,15 +17,22 @@ import {
 } from './emitters';
 
 const MAX_PARTICLES = [1400, 2400, 3600, 5000];
+/** MVac light: depth inside the nozzle, above the exit plane (m; throat at ~3.6) */
+const MVAC_LIGHT_DEPTH = 2.8;
+/** MECO remnant lifetime (s) */
+const REM_LIFE = 20;
 const EMIT_SCALE = [0.35, 0.6, 0.85, 1];
 
-interface LightCand { pos: THREE.Vector3; color: THREE.Color; intensity: number }
+interface LightCand { pos: THREE.Vector3; color: THREE.Color; intensity: number; cap: number }
 
 export class VFX implements FrameModule {
   private ready = false;
   private ps!: ParticleSystem;
   private plumeS1!: PlumeVolume;
   private plumeS2!: PlumeVolume;
+  /** MECO remnant: the S1 high-altitude shell left behind at shutdown ("jellyfish" afterglow) */
+  private plumeRem!: PlumeVolume;
+  private readonly rem = { armed: false, on: false, t0: 0, vel: new THREE.Vector3(), pos: new THREE.Vector3(), ex: new THREE.Vector3() };
   private cond!: Condensation;
   private readonly root = new THREE.Group();
   private readonly pad = new PadEmitter();
@@ -84,8 +91,9 @@ export class VFX implements FrameModule {
     this.ps = new ParticleSystem(this.ctx, MAX_PARTICLES[3], puffs);
     this.plumeS1 = new PlumeVolume(this.ctx, 'merlin');
     this.plumeS2 = new PlumeVolume(this.ctx, 'mvac');
+    this.plumeRem = new PlumeVolume(this.ctx, 'merlin');
     this.cond = new Condensation(this.ctx);
-    this.root.add(this.ps.mesh, this.plumeS1.group, this.plumeS2.group, this.cond.mesh);
+    this.root.add(this.ps.mesh, this.plumeS1.group, this.plumeS2.group, this.plumeRem.group, this.cond.mesh);
     this.ready = true;
   }
 
@@ -126,6 +134,7 @@ export class VFX implements FrameModule {
     this.plumeS2.setDrive(this.driveS2, q);
     this.exhaustS1.set(0, -1, 0).applyQuaternion(this.driveS1.quat);
     this.exhaustS2.set(0, -1, 0).applyQuaternion(this.driveS2.quat);
+    this.updateRemnant(t, S1, q);
 
     // ---------- events by state transition
     this.detectEvents(snap, emitQ);
@@ -165,9 +174,10 @@ export class VFX implements FrameModule {
 
   beforeViewRender(view: ViewInfo, _snap: SimSnapshot): void {
     if (!this.ready) return;
-    this.fadeHazeForView(view.camWorldPos, view.camera);
+    this.fadeHazeForView(view.camWorldPos);
     this.plumeS1.prepareView(view);
     this.plumeS2.prepareView(view);
+    this.plumeRem.prepareView(view);
     this.cond.prepareView(view);
     if (this.particlesEnabled) {
       const split = Math.min(this.plumeS1.distanceToAxis(view.camWorldPos), this.plumeS2.distanceToAxis(view.camWorldPos));
@@ -179,6 +189,36 @@ export class VFX implements FrameModule {
   // ------------------------------------------------------------------------------------------
   private flicker(time: number): number {
     return 1 + 0.045 * Math.sin(time * 31.7) * Math.sin(time * 17.3 + 1.3) + 0.03 * Math.sin(time * 53.1 + 0.7);
+  }
+
+  /**
+   * MECO remnant. While S1 burns at altitude (expanded shell regime) keep a copy of its plume; when
+   * the engines shut down, that shell stays behind: it drifts with part of the vehicle's velocity,
+   * expands self-similarly and thins out over ~15-20 s. Sunlit only where the sun reaches it.
+   */
+  private updateRemnant(t: number, S1: BodyState, q: number): void {
+    const live = this.plumeS1, sh = live.shape, r = this.rem;
+    if (live.active && sh.e > 1.6 && sh.retro < 0.05 && sh.mass > 5) {
+      this.plumeRem.captureFrom(live);
+      r.armed = true; r.on = false; r.t0 = t;
+      r.vel.copy(S1.vel); r.pos.copy(live.group.position); r.ex.copy(this.exhaustS1);
+    } else if (r.armed && !r.on && (!live.active || sh.mass < 3)) {
+      r.on = true;
+    }
+    const age = t - r.t0;
+    if (r.on && (age < 0 || age > REM_LIFE)) { r.on = false; r.armed = false; }
+    if (!r.on) { this.plumeRem.setRemnant(r.pos, 1, 0, 0, _c1, _c2, q); return; }
+    // the shell gas is braked toward the air: keeps ~35% of the vehicle velocity, falls freely
+    const up = _v1.set(r.pos.x, r.pos.y + EARTH_RADIUS, r.pos.z).normalize();
+    const pos = _v2.copy(r.pos).addScaledVector(r.vel, 0.35 * age).addScaledVector(up, -4.9 * age * age);
+    const grow = 1 + 0.11 * age;
+    // (the shell thins as it spreads ~1/grow; a slow fade on top; short fade-in hides the hand-off)
+    const dens = smooth(0, 0.6, age) * (1 - smooth(4, REM_LIFE, age));
+    const L = this.plumeRem.shape.L;
+    const probe = _v3.copy(pos).addScaledVector(r.ex, L * 0.45);
+    const sun = sunRadianceAt(probe.x, probe.y, probe.z, this.ctx.lighting.sunDir, _c1);
+    const amb = ambientAt(altitudeW(probe.x, probe.y, probe.z), this.ctx, _c2);
+    this.plumeRem.setRemnant(pos, grow, dens, L * Math.min(0.5, 0.025 * age), sun, amb, q);
   }
 
   private thrustFrac(bs: BodyState): number {
@@ -320,10 +360,20 @@ export class VFX implements FrameModule {
   private updateLights(snap: SimSnapshot, flick: number): void {
     const cands = this.lightCands;
     cands.length = 0;
-    const add = (pos: THREE.Vector3, r: number, g: number, bl: number, intensity: number) => {
+    // The THREE point lights cast no shadows. A light on the axis below the stack reaches the
+    // aft-facing fairing base ring (5.2 m fairing on a 3.66 m body) ~60 m up, which the body
+    // shadows completely in reality: an orange crescent near the nose in the max-Q chase. Such lights
+    // get their THREE range capped short of the ring (the octaweb, legs, pad and deck are much
+    // closer; aft-facing surfaces are the only ones an on-axis light below the base can reach).
+    // ctx.plumeLights (terrain / ocean / smoke) keep the full range.
+    const b = snap.bodies;
+    const ringOn = b.FAIRING_A.status === 'stacked' && b.S2.status !== 'gone' && b.S2.status !== 'destroyed';
+    const ring = _v5.set(0, F9.fairing.baseY, 0).applyQuaternion(b.S2.quat).add(b.S2.pos);
+    const add = (pos: THREE.Vector3, r: number, g: number, bl: number, intensity: number, belowRing = false) => {
       if (intensity < 1) return;
-      const c = this.candPool[cands.length] ?? (this.candPool[cands.length] = { pos: new THREE.Vector3(), color: new THREE.Color(), intensity: 0 });
+      const c = this.candPool[cands.length] ?? (this.candPool[cands.length] = { pos: new THREE.Vector3(), color: new THREE.Color(), intensity: 0, cap: Infinity });
       c.pos.copy(pos); c.color.setRGB(r, g, bl); c.intensity = intensity;
+      c.cap = belowRing && ringOn ? 0.93 * pos.distanceTo(ring) : Infinity;
       cands.push(c);
     };
     for (const [pl, d, ex] of [[this.plumeS1, this.driveS1, this.exhaustS1], [this.plumeS2, this.driveS2, this.exhaustS2]] as const) {
@@ -332,10 +382,11 @@ export class VFX implements FrameModule {
       const green = Math.max(...d.green);
       const gcol = (x: number, gx: number) => x * (1 - green) + gx * green;
       if (pl.kind === 'mvac') {
-        // dim warm light from inside the nozzle extension (the glowing niobium skirt / hot throat);
-        // the vacuum plume itself emits almost nothing
-        _v1.copy(d.origin).addScaledVector(ex, -1.2);
-        add(_v1, gcol(1, 0.3), gcol(0.55, 1), gcol(0.3, 0.4), 14 * sh.mass * flick + 400 * green);
+        // dim warm light from deep inside the nozzle extension (hot throat + glowing niobium skirt);
+        // the vacuum plume itself emits almost nothing. (Placed near the throat: from 1.2 m inside the
+        // exit it lit the bell's interior like the sun, a cream disc filling the bell in the chase view.)
+        _v1.copy(d.origin).addScaledVector(ex, -MVAC_LIGHT_DEPTH);
+        add(_v1, gcol(1, 0.3), gcol(0.42, 1), gcol(0.16, 0.4), 8 * sh.mass * flick + 400 * green, true);
         continue;
       }
       const lum = sh.lumBright;
@@ -344,12 +395,12 @@ export class VFX implements FrameModule {
       if (sh.planeDist < Infinity) dist = Math.min(dist, sh.planeDist * 0.6);
       _v1.copy(d.origin).addScaledVector(ex, dist);
       const I = (1300 * sh.mass * lum + 700 * sh.mass * sh.retro) * flick;
-      add(_v1, gcol(1, 0.3), gcol(0.5, 1), gcol(0.2, 0.4), I + 3000 * green);
+      add(_v1, gcol(1, 0.3), gcol(0.5, 1), gcol(0.2, 0.4), I + 3000 * green, pl === this.plumeS1 && b.S2.status === 'stacked');
       // ground/deck flash where the flame hits
       if (sh.planeDist < 60 && d.plane) {
         _v2.copy(d.origin).addScaledVector(ex, sh.planeDist - 1.5);
         const hitI = 2600 * sh.mass * lum * (1 - sh.planeDist / 60) * flick;
-        add(_v2, 1, 0.55, 0.25, hitI);
+        add(_v2, 1, 0.55, 0.25, hitI, pl === this.plumeS1 && b.S2.status === 'stacked');
       }
     }
     // pad: fire out of the trench mouth
@@ -382,7 +433,7 @@ export class VFX implements FrameModule {
         L.position.copy(c.pos);
         L.color.copy(c.color);
         L.intensity = c.intensity;
-        L.distance = Math.min(4000, Math.sqrt(c.intensity / 0.004));
+        L.distance = Math.min(4000, Math.sqrt(c.intensity / 0.004), c.cap);
       } else {
         L.intensity = 0;
       }
@@ -436,14 +487,11 @@ export class VFX implements FrameModule {
   }
   private hzPool: { start: THREE.Vector3; end: THREE.Vector3; radius0: number; radius1: number; strength: number }[] = [];
   private hzBase: number[] = [];
-  /** Per view: a haze capsule that passes through / right next to the camera, or that reaches
-   *  behind the camera plane (a column seen from below), projects to a degenerate screen capsule
-   *  (huge radius, clipped axis) and post's distortion noise smears into streaks (pad "up" cam).
-   *  Fade such sources out for this view only. */
-  private fadeHazeForView(cam: THREE.Vector3, camera: THREE.Camera): void {
+  /** Per view: a haze capsule that passes through / right next to the camera fills the frame with
+   *  distortion (post clips capsules to the near plane since round 3, so only this distance fade is
+   *  left). Fade such sources out for this view only. */
+  private fadeHazeForView(cam: THREE.Vector3): void {
     const src = this.ctx.hazeSources;
-    const e = camera.matrixWorld.elements;
-    const fx = -e[8], fy = -e[9], fz = -e[10];
     for (let i = 0; i < src.length; i++) {
       const hz = src[i];
       const base = this.hzBase[i] ?? hz.strength;
@@ -453,12 +501,7 @@ export class VFX implements FrameModule {
       const h = L2 > 1e-6 ? clamp01(_v2.dot(_v1) / L2) : 0;
       const d = _v2.addScaledVector(_v1, -h).length();
       const r = hz.radius0 + (hz.radius1 - hz.radius0) * h;
-      const zs = (hz.start.x - cam.x) * fx + (hz.start.y - cam.y) * fy + (hz.start.z - cam.z) * fz;
-      const ze = (hz.end.x - cam.x) * fx + (hz.end.y - cam.y) * fy + (hz.end.z - cam.z) * fz;
-      const zmin = Math.min(zs, ze);
-      // (both ends behind the camera: post culls it anyway)
-      const depthK = Math.max(zs, ze) < 0 ? 1 : smooth(0.5 * Math.max(hz.radius0, hz.radius1), 2 * Math.max(hz.radius0, hz.radius1), zmin);
-      hz.strength = base * smooth(r * 1.2, r * 2.4, d) * depthK;
+      hz.strength = base * smooth(r * 1.2, r * 2.4, d);
     }
   }
 
@@ -471,6 +514,7 @@ export class VFX implements FrameModule {
     this.trailS1.reset();
     this.trailS2.reset();
     this.landing.touchdownT = -Infinity;
+    this.rem.armed = false; this.rem.on = false;
     // prev-state trackers from the current snapshot (don't fire one-shot events on a jump)
     this.prevS2Status = b.S2.status;
     this.prevFairStatus = b.FAIRING_A.status;

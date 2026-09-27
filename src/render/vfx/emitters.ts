@@ -397,7 +397,8 @@ export class LandingEmitter {
         s.size0 = 1.2 + R(); s.size1 = 5 + 4 * R(); s.sizeTau = 0.35; s.sizeDiff = 0;
         s.life = 0.45 + 0.4 * R(); s.tau = 0.6; s.fadeIn = 0.02;
         s.drag = 0.5; s.buoy = 3; s.buoyTau = 1;
-        s.r = 0.3; s.g = 0.26; s.b = 0.23;
+        // (once the flame sheet cools it is mostly water vapour with a little soot: grey, not brown)
+        s.r = 0.46; s.g = 0.45; s.b = 0.44;
         s.temp = 2300 + 200 * R(); s.tempTau = 0.35; s.emis = 26;
         s.variant = R() < 0.5 ? (R() * 4) | 0 : 4 + ((R() * 4) | 0); s.turb = 0; s.flags = P_DECK | P_OCEAN; s.spin = RS(); s.prio = 2;
         s.axX = dx; s.axY = dy; s.axZ = dz; s.aspect = 3.2; // radial flame sheet: streaks racing outward
@@ -423,7 +424,7 @@ export class LandingEmitter {
         s.life = 4 + 4 * R(); s.tau = 4.5; s.fadeIn = 0.08;
         s.drag = 0.7; s.buoy = 1.4; s.buoyTau = 6;
         s.r = 0.93; s.g = 0.93; s.b = 0.93;
-        s.temp = R() < 0.3 ? 1600 : 0; s.tempTau = 0.25; s.emis = 6;
+        s.temp = R() < 0.15 ? 1600 : 0; s.tempTau = 0.25; s.emis = 4;
         s.variant = (R() * 4) | 0; s.turb = 1.5; s.flags = P_DECK | P_OCEAN; s.spin = RS() * 0.1; s.prio = 3;
         s.level = -1;
         ps.emit();

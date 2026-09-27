@@ -679,7 +679,9 @@ void main() {
     vec3 d = uPLPos[k] - wp;
     float d2 = dot(d, d);
     float win = clamp(1.0 - pow(sqrt(d2) / uPLRange[k], 4.0), 0.0, 1.0);
-    vec3 e = uPLCol[k] * win * win / (d2 + size * size * 0.25 + 1.0);
+    // (softened by the puff size and by the extent of the source itself: the flame / fire are
+    //  metres long, so a puff next to them is not lit like one next to a point)
+    vec3 e = uPLCol[k] * win * win / (d2 + size * size * 0.35 + 30.0);
     pl += e;
     pd += normalize(d + 1e-4) * dot(e, vec3(0.3, 0.5, 0.2));
   }
@@ -687,7 +689,7 @@ void main() {
   //  exposures put it at ~2^-3..2^-1.5 while the plume core (60-150) stays the brightest element.
   //  Saturated toward deep orange so the tone mapper does not wash it to cream.)
   float plL = dot(pl, vec3(0.3, 0.5, 0.2));
-  vPL = max(mix(vec3(plL), pl, 1.35), 0.0) * iMisc.z * 0.04;
+  vPL = max(mix(vec3(plL), pl, 1.35), 0.0) * iMisc.z * 0.028;
   vPLDir = normalize((modelViewMatrix * vec4(pd + vec3(0.0, 1e-6, 0.0), 0.0)).xyz);
   vAT = aerialTransmittance(wp);
   vAI = aerialInscatter(wp);
@@ -767,12 +769,19 @@ void main() {
   float silver = hgPhase(cosT, 0.8) * 12.566 * exp(-1.3 * vTauTSize.x * dens) * 0.3;
   float denseTerm = lamb * mix(0.65, 1.0, ao) + 0.26 * mix(0.6, 1.0, ao) + silver;
   float thinTerm = mix(1.0, hgPhase(cosT, 0.55) * 12.566, 0.65);
-  float sunTerm = mix(denseTerm, thinTerm, thin);
+  // Daylight steam / smoke reads white-grey in real footage (the camera white-balances the ~17 deg
+  // morning sun, and multiple scattering in the cloud mixes in the blue skylight). A cloud built
+  // from overlapping, individually thin puffs would otherwise take the full direct-sun tint (beige).
+  // Keep the warm / red sun near and below the horizon (sunset smoke, twilight plumes).
+  float sunY = dot(vSun, vec3(0.2126, 0.7152, 0.0722));
+  float wb = 0.7 * smoothstep(0.05, 0.3, dot(uSunView, uUpView));
+  vec3 sunW = mix(vSun, vec3(sunY), wb);
+  vec3 sunDense = mix(sunW, vec3(sunY), 0.3 * (1.0 - thin));
   float nu = dot(n, uUpView);
   vec3 amb = uAmbCol * (0.62 + 0.38 * nu) * vAmb + uGndCol * (0.5 - 0.5 * nu) * 0.6;
   float plW = clamp((dot(n, vPLDir) + 0.6) / 1.6, 0.0, 1.0);
   plW = max(plW, transD * clamp(-dot(n, vPLDir), 0.0, 1.0));
-  vec3 E = vSun * sunTerm + amb * mix(1.0, ao, billowy * 0.6) + vPL * mix(plW * mix(0.6, 1.0, ao), 0.8, thin);
+  vec3 E = mix(sunDense * denseTerm, sunW * thinTerm, thin) + amb * mix(1.0, ao, billowy * 0.6) + vPL * mix(plW * mix(0.6, 1.0, ao), 0.8, thin);
   vec3 lit = vAlbEmis.rgb * E * 0.3183;
   float alpha = (1.0 - exp(-vTauTSize.x * dens)) * soft * vNear;
   // blackbody emission (fire / glowing exhaust), independent of opacity

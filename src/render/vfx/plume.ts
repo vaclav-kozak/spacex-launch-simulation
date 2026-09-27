@@ -87,8 +87,15 @@ export class PlumeVolume {
   private lowMesh: THREE.Mesh;
   private lowScene = new THREE.Scene();
   private quality = 2;
+  /** MVac look constants (shared module object; exposed for live tuning from the console) */
+  readonly vacTune = MVAC_TUNE;
+  /** per-quality step counts / half-res threshold (shared module object; live-tunable) */
+  readonly qTune = PLUME_Q;
   readonly shape: PlumeShape = { e: 0, ex: 0, mass: 0, L: 0, Rc: 1, tanT: 0.05, retro: 0, standoff: 1e9, lumBright: 0, planeDist: Infinity, bellP: 1, a0: 0 };
   private camInside = false;
+  /** last view coverage estimate and low-res factor (diagnostics) */
+  cov = 0;
+  private lowF = 2;
   private qInv = new THREE.Quaternion();
   active = false;
 
@@ -116,12 +123,23 @@ export class PlumeVolume {
       uAmbRad: { value: new THREE.Color() },
       uScat: { value: new THREE.Vector4(0, 0, 0, 0) },
       uSteps: { value: 24 },
+      uLowF: { value: 2 }, // low-res pass: full-res pixels per low-res texel (2 or 3)
       uFlick: { value: 1 },
       uShape: { value: new THREE.Vector4(1, 100, 0, 0) }, // bell exponent, L
       uFlameB: { value: new THREE.Vector4(0, 0, 0, 0) },  // flame sub-proxy x0,x1,R0,R1
+      // MVac vacuum plume (see VAC_GLSL): K, condensation radius R0, boundary angle, shell half-width
+      uVacA: { value: new THREE.Vector4(0, 20, 0.87, 0.1) },
+      // virtual source (axial a), far fade length, shell build-up radius, core weight
+      uVacB: { value: new THREE.Vector4(-2, 1400, 90, 0.3) },
+      // far-field condensate gain, its ramp radius (m), interior fill weight, core half-width (rad)
+      uVacC: { value: new THREE.Vector4(6, 1200, 0.1, 0.27) },
+      // MECO remnant: on (0/1), density multiplier, detach distance (m), -
+      uRem: { value: new THREE.Vector4(0, 1, 0, 0) },
     };
+    const kindDefs: Record<string, number> = kind === 'mvac' ? { PLUME_MVAC: 1 } : {};
     this.mat = new THREE.ShaderMaterial({
       uniforms: u,
+      defines: { ...kindDefs },
       vertexShader: PLUME_VS,
       fragmentShader: PLUME_FS,
       transparent: true,
@@ -154,7 +172,7 @@ export class PlumeVolume {
     };
     this.lowMat = new THREE.ShaderMaterial({
       uniforms: u,
-      defines: { VFX_LOWRES: 1 },
+      defines: { VFX_LOWRES: 1, ...kindDefs },
       vertexShader: PLUME_VS,
       fragmentShader: PLUME_FS,
       depthWrite: false,
@@ -172,7 +190,7 @@ export class PlumeVolume {
       uniforms: {
         uSceneDepth: vfxShared.uSceneDepth, uHasDepth: vfxShared.uHasDepth,
         uLow: { value: null }, uLowSize: { value: new THREE.Vector2(1, 1) }, uLowTexel: { value: new THREE.Vector2(1, 1) },
-        uCamLocal: u.uCamLocal, uBounds: u.uBounds,
+        uCamLocal: u.uCamLocal, uBounds: u.uBounds, uLowF: u.uLowF,
       },
       vertexShader: PLUME_VS,
       fragmentShader: PLUME_COMP_FS,
@@ -283,10 +301,10 @@ export class PlumeVolume {
     // scattering column: optical depth through the plume center ~ scat / R  (mass flux / area)
     // (MVac: the vacuum plume is nearly transparent; only a faint sunlit haze survives)
     const scat = (vac ? 1.5 : 150) * smooth(0.5, 2.4, e) * massFrac;
-    const coreLen = vac ? 3 + 3 * ex : 4.2 + 10 * ex + 3 * Math.max(0, e);
+    const coreLen = vac ? MVAC_TUNE.coreLen * (1 + 0.4 * ex) : 4.2 + 10 * ex + 3 * Math.max(0, e);
     const diaSpacing = 1.05 * (1 + 1.4 * Math.max(0, e));
     const diaAmp = vac ? 0 : 1 - smooth(0.5, 1.6, e);
-    const coreBright = vac ? 0.07 : 190 * (1 - 0.35 * smooth(1.5, 4, e));
+    const coreBright = vac ? MVAC_TUNE.emis : 190 * (1 - 0.35 * smooth(1.5, 4, e));
 
     u.uEng.value = d.eng.length === 9 ? d.eng : [d.eng[0], 0, 0, 0, 0, 0, 0, 0, 0];
     u.uGreen.value = d.green.length === 9 ? d.green : [d.green[0], 0, 0, 0, 0, 0, 0, 0, 0];
@@ -305,7 +323,7 @@ export class PlumeVolume {
     u.uAmbRad.value.copy(d.ambRad);
     this.qInv.copy(d.quat).invert();
     u.uSunLocal.value.copy(this.ctx.lighting.sunDir).applyQuaternion(this.qInv);
-    u.uSteps.value = [16, 24, 36, 52][quality] ?? 36;
+    u.uSteps.value = (vac ? PLUME_Q.vac : PLUME_Q.march)[quality] ?? (vac ? 20 : 36);
     this.quality = quality;
     u.uFlick.value = d.flicker;
 
@@ -358,6 +376,23 @@ export class PlumeVolume {
       if (wall > 0) R1 = Math.max(R1, u.uPlaneP.value.w * 3.2);
       x0 = Math.min(x0, x1 - 1);
     }
+    u.uRem.value.set(0, 1, 0, 0);
+    if (vac) {
+      // Vacuum plume (Simons-type source flow): gas leaves a virtual source just inside the bell,
+      // density ~ K f(theta) / (R^2 + R0^2) out to kilometres. f = faint core + fill + a brighter
+      // boundary shell at ~50 deg that builds up downstream; R0 = where the exhaust has cooled
+      // enough to condense (nothing scatters right at the exit, so the bell stays clear).
+      const aS = -1.2 * F9.s2.mvac.exitRadius;
+      const V = MVAC_TUNE;
+      const thB = V.thB, w = V.w;
+      u.uVacA.value.set(V.K * massFrac, V.R0, thB, w);
+      u.uVacB.value.set(aS, V.fade, V.shellR, V.core);
+      u.uVacC.value.set(V.G, V.condR, V.fill, V.coreW);
+      const tMax = Math.tan(thB + 3 * w);
+      x0 = 0.02; x1 = MVAC_REACH;
+      R0 = Math.max(Rc + 0.5, (x0 - aS) * tMax);
+      R1 = (x1 - aS) * tMax;
+    }
     u.uBounds.value.set(x0, x1, R0, R1);
     const fb = u.uFlameB.value as THREE.Vector4;
     if (retro > 0.3) {
@@ -393,6 +428,54 @@ export class PlumeVolume {
     gl.uGlow.value.set(col.r * pw, col.g * pw, col.b * pw, vac ? 1.2 : Rc * 1.4 + 1.5);
   }
 
+  // ---- MECO remnant: this volume as a ghost of another plume's expanded shell
+  private remBase = { L: 0, a0: 0, Rc: 0, bounds: new THREE.Vector4() };
+
+  /** Take a live plume's current shape, shading and transform as the remnant's starting state. */
+  captureFrom(src: PlumeVolume): void {
+    const a = this.mat.uniforms, b = src.mat.uniforms;
+    for (const k of ['uGeom', 'uCore', 'uFlame', 'uMisc', 'uRetro', 'uRetroB', 'uPlaneN', 'uPlaneP', 'uShape', 'uFlameB', 'uBounds']) {
+      (a[k].value as THREE.Vector4).copy(b[k].value as THREE.Vector4);
+    }
+    Object.assign(this.shape, src.shape);
+    const rb = this.remBase;
+    rb.L = src.shape.L; rb.a0 = src.shape.a0; rb.Rc = src.shape.Rc;
+    rb.bounds.copy(b.uBounds.value as THREE.Vector4);
+    this.group.quaternion.copy(src.group.quaternion);
+  }
+
+  /**
+   * Drive the remnant: the captured shell (no cores, flame or inner jet) grows self-similarly by
+   * `grow`, its optical depth is scaled by `dens`, and it lets go of the nozzle up to `detach` m.
+   */
+  setRemnant(origin: THREE.Vector3, grow: number, dens: number, detach: number, sunRad: THREE.Color, ambRad: THREE.Color, quality: number): void {
+    this.active = dens > 1e-3;
+    this.group.visible = this.active;
+    if (!this.active) return;
+    const u = this.mat.uniforms;
+    const rb = this.remBase;
+    (u.uCore.value as THREE.Vector4).w = 0;
+    (u.uFlame.value as THREE.Vector4).x = 0;
+    (u.uFlame.value as THREE.Vector4).z = 0;
+    (u.uFlameB.value as THREE.Vector4).set(0, 0, 0, 0);
+    (u.uShape.value as THREE.Vector4).y = rb.L * grow;
+    (u.uShape.value as THREE.Vector4).z = rb.a0 * grow;
+    (u.uMisc.value as THREE.Vector4).w = rb.L * grow;
+    (u.uGeom.value as THREE.Vector4).z = rb.Rc * grow;
+    (u.uBounds.value as THREE.Vector4).copy(rb.bounds).multiplyScalar(grow);
+    (u.uRem.value as THREE.Vector4).set(1, dens, detach, 0);
+    u.uSunRad.value.copy(sunRad);
+    u.uAmbRad.value.copy(ambRad);
+    this.qInv.copy(this.group.quaternion).invert();
+    u.uSunLocal.value.copy(this.ctx.lighting.sunDir).applyQuaternion(this.qInv);
+    u.uSteps.value = PLUME_Q.march[quality] ?? 36;
+    this.quality = quality;
+    this.group.position.copy(origin);
+    const sh = this.shape;
+    sh.L = rb.L * grow; sh.Rc = rb.Rc * grow; sh.a0 = rb.a0 * grow; sh.lumBright = 0; sh.mass = 0;
+    this.glow.visible = false;
+  }
+
   /** Per view: camera in local space, inside/outside handling. */
   prepareView(view: ViewInfo): void {
     if (!this.active) return;
@@ -412,7 +495,10 @@ export class PlumeVolume {
     this.glowMat.uniforms.uFade.value = 1 - smooth(6, 40, sizePx);
     // big on screen -> march at half resolution (the plume is soft; cost ~ covered pixels x steps)
     const cov = this.camInside ? 1 : this.coverage(view, cl, b);
-    this.mesh.material = cov > (LOWRES_COVERAGE[this.quality] ?? 0.15) ? this.compMat : this.mat;
+    this.cov = cov;
+    this.mesh.material = cov > (PLUME_Q.lowres[this.quality] ?? 0.15) ? this.compMat : this.mat;
+    // (third-res once it fills much of the view: soft, and the cost is ~ covered pixels x steps)
+    this.lowF = cov > (PLUME_Q.third[this.quality] ?? 9) ? 3 : 2;
   }
 
   /** rough fraction of the view covered by the proxy (capsule around the axis segment) */
@@ -432,7 +518,8 @@ export class PlumeVolume {
   /** half-res march into the shared low target (nested render, called from the proxy's onBeforeRender) */
   private renderLow(r: THREE.WebGLRenderer, cam: THREE.Camera, side: THREE.Side): void {
     r.getCurrentViewport(_vp4);
-    const lw = Math.max(1, Math.ceil(_vp4.z / 2)), lh = Math.max(1, Math.ceil(_vp4.w / 2));
+    const f = this.lowF;
+    const lw = Math.max(1, Math.ceil(_vp4.z / f)), lh = Math.max(1, Math.ceil(_vp4.w / f));
     const rt = lowTarget(lw, lh);
     rt.viewport.set(0, 0, lw, lh);
     rt.scissor.set(0, 0, lw, lh);
@@ -458,6 +545,7 @@ export class PlumeVolume {
     cu.uLow.value = rt.texture;
     (cu.uLowSize.value as THREE.Vector2).set(lw, lh);
     (cu.uLowTexel.value as THREE.Vector2).set(1 / rt.width, 1 / rt.height);
+    this.mat.uniforms.uLowF.value = f;
   }
 
   /** distance from a W point to the visible plume axis segment (for particle/plume ordering) */
@@ -488,8 +576,24 @@ const _c = new THREE.Color();
 const _c2 = new THREE.Color();
 const _cc = new THREE.Color();
 const _vp4 = new THREE.Vector4();
-/** per quality level: view fraction above which the plume is marched at half resolution */
-const LOWRES_COVERAGE = [0.03, 0.1, 0.18, 0.4];
+/** MVac scattering constant (optical depth ~ K / impact distance) and proxy reach (m) */
+/** MVac vacuum-plume look (see vacF): K optical-depth scale, R0 clear radius at the exit (m),
+ *  boundary angle / shell half-width (rad), far fade (m), shell build-up radius (m), core weight,
+ *  far-field condensate gain G and its ramp radius (m), interior fill weight, core half-width (rad);
+ *  emissive exit core: brightness, e-folding length (m) */
+export const MVAC_TUNE = {
+  K: 1.5, R0: 8, thB: 0.4, w: 0.06, fade: 2500, shellR: 25, core: 0.35, G: 20, condR: 1500, fill: 0.05, coreW: 0.3,
+  emis: 0.01, coreLen: 1.6,
+};
+const MVAC_REACH = 4000;
+/** per quality level (0 low .. 3 ultra): Merlin outer-march samples, MVac samples (importance-sampled:
+ *  far fewer), the view fraction above which a plume is marched at half resolution, and above which at third res */
+const PLUME_Q = {
+  march: [16, 24, 36, 52],
+  vac: [10, 14, 20, 28],
+  lowres: [0.03, 0.1, 0.18, 0.4],
+  third: [0.15, 0.3, 0.45, 9],
+};
 
 const FRUSTUM_GLSL = /* glsl */ `
 // ray vs the proxy frustum (x0..x1 along the exhaust, radii R0..R1) -> (tEnter, tExit)
@@ -564,9 +668,14 @@ uniform vec3 uSunRad;
 uniform vec3 uAmbRad;
 uniform float uTime;
 uniform float uSteps;
+uniform float uLowF;
 uniform float uFlick;
 uniform vec4 uShape;
 uniform vec4 uFlameB;
+uniform vec4 uVacA;
+uniform vec4 uVacB;
+uniform vec4 uVacC;
+uniform vec4 uRem;
 varying vec3 vLocal;
 varying vec3 vView;
 
@@ -731,16 +840,18 @@ void field(vec3 p, int mode, out vec3 em, out float sigT, out float sigS) {
     float bell = (shell * 1.1 * memStart + fill * 0.08) / (0.5 * R * R + 16.0 * Rc2) * bellStart * shellK;
     // (inner jet: optical depth ~ kIn*K*1.4/Rin -> about 1 a few nozzle radii out, translucent beyond;
     //  the bell carries the full scattering constant so the km-sized membrane stays visible)
-    float kIn = vac > 0.5 ? 0.04 : 0.08;
+    float kIn = (vac > 0.5 ? 0.04 : 0.08) * (1.0 - uRem.x);
     float s = uFlame.w * start * (kIn * (1.0 - 0.55 * shellK) * inner * mix(0.45 + 1.1 * turb, 0.75 + 0.5 * turb, tsm) + bell);
     s *= (1.0 - retro) * smoothstep(L, L * 0.45, a);
+    // (MECO remnant: the shell left behind thins out and lets go of the (departed) nozzle first)
+    s *= mix(1.0, uRem.y * smoothstep(uRem.z, uRem.z * 1.4 + 1.0, a), uRem.x);
     sigS += s;
     // faint luminous exhaust (hot CO2/H2O/soot) close to the engines
     vec3 gcol = vac > 0.5 ? vec3(0.55, 0.45, 1.0) : vec3(1.0, 0.6, 0.35);
     // (MVac: a faint bluish-violet translucent cone, independent of the (tiny) scattering)
     em += vac > 0.5
       ? gcol * 0.3 * mass * start * inner * exp(-a / (uGeom.z * 2.0 + 4.0)) * uFlick
-      : gcol * uFlame.w * start * inner * 0.9 * exp(-a / (uGeom.z * 5.0 + 10.0)) * uFlick * (1.0 - retro);
+      : gcol * uFlame.w * start * inner * 0.9 * exp(-a / (uGeom.z * 5.0 + 10.0)) * uFlick * (1.0 - retro) * (1.0 - uRem.x);
   }
 
   // ----- supersonic retro-propulsion (entry burn, start of the landing burn)
@@ -829,6 +940,64 @@ void field(vec3 p, int mode, out vec3 em, out float sigT, out float sigS) {
   sigS *= clip * endF;
 }
 
+#ifdef PLUME_MVAC
+// ----- MVac vacuum plume. Optical-depth density K F(theta, R) / (R^2 + R0^2) around a virtual source on
+// the axis (R: distance from it, theta: angle off the exhaust axis). Equi-angular sampling about the
+// source with the softened impact distance B = sqrt(b^2 + R0^2) importance-samples the radial falloff
+// exactly (sigma dt = K F dphi / B), so a handful of samples resolves the near field and a km-long
+// plume alike. F: faint core + fill, a brighter boundary shell that builds up downstream (the
+// limb-brightened "jellyfish" membrane), faint wings outside; radial streamers; nothing within ~R0 of
+// the exit (the exhaust has not condensed yet), so the bell stays clear.
+float vacF(vec3 d, float R) {
+  float th = acos(clamp(-d.y / R, -1.0, 1.0));
+  vec2 dir = d.xz / max(length(d.xz), 1e-4);
+  float lg = log2(R + 8.0);
+  float n1 = n3(vec3(dir * 1.9, lg * 0.35 - uTime * 0.02));
+  float n2 = uSteps > 12.0 ? n3(vec3(dir * 4.3 + 2.0, lg * 0.7 + 0.37)) : 0.5;
+  float stre = n1 * 0.6 + n2 * 0.4;
+  float streak = mix(1.0, 0.55 + 0.9 * smoothstep(0.32, 0.74, stre), smoothstep(0.03, 0.3, th) * (1.0 - 0.5 * smoothstep(200.0, 2000.0, R)));
+  // (boundary rippled by the streamers, swept slightly back far downstream)
+  float thB = uVacA.z * (1.0 + 0.08 * (stre - 0.5)) * (1.0 - 0.1 * smoothstep(400.0, 2500.0, R));
+  float x = (th - thB) / (uVacA.w * (0.75 + 0.6 * n2));
+  float inside = 1.0 - smoothstep(-1.0, 0.6, x);
+  float shell = exp(-x * x) * smoothstep(0.1 * uVacB.z, uVacB.z, R);
+  float tc = th / uVacC.w;
+  float core = exp(-tc * tc);
+  float fill = uVacC.z * smoothstep(0.05, thB, th) * inside;
+  float wing = 0.25 * uVacC.z * exp(-max(x, 0.0) * 0.7) * (1.0 - inside);
+  float F = uVacB.w * core + (fill + wing + shell) * streak;
+  // condensate builds up as the flow cools: clear at the exit, x(1 + G) by ~a km
+  float cond = smoothstep(0.2 * uVacA.y, 1.3 * uVacA.y, R) * (1.0 + uVacC.x * smoothstep(0.0, uVacC.y, R));
+  return F * cond * exp(-R / uVacB.y);
+}
+void vacMarch(vec3 ro, vec3 rd, float t0, float t1, float jit, vec3 sunIn, inout vec3 L, inout float T) {
+  vec3 oc = ro - vec3(0.0, -uVacB.x, 0.0);
+  float tc = -dot(oc, rd);
+  vec3 pc = oc + rd * tc;
+  float B = sqrt(dot(pc, pc) + uVacA.y * uVacA.y);
+  float ph0 = atan((t0 - tc) / B), ph1 = atan((t1 - tc) / B);
+  float N = uSteps;
+  float dph = (ph1 - ph0) / N;
+  float kB = uVacA.x * dph / B;
+  // brightness from scattered sunlight only (uSunRad carries the Earth shadow): sub-micron
+  // condensate, slightly blue-white; a trace of sky / Earthshine
+  vec3 Li = (sunIn + uAmbRad * 0.08) * vec3(0.8, 0.92, 1.14);
+  // a close camera (chase / onboard) sits in or right next to the plume: thin out the gas within
+  // ~half its distance to the source, so the frame shows the plume's shape instead of a uniform fog
+  float Dn = min(length(oc), 120.0);
+  for (int i = 0; i < 32; i++) {
+    if (float(i) >= N || T < 0.01) break;
+    float ph = ph0 + (float(i) + jit) * dph;
+    float t = tc + B * tan(ph);
+    vec3 d = oc + rd * t;
+    float R = max(length(d), 1e-3);
+    float Tr = exp(-kB * vacF(d, R) * smoothstep(0.12 * Dn, 0.5 * Dn, t));
+    L += T * Li * (1.0 - Tr);
+    T *= Tr;
+  }
+}
+#endif
+
 void main() {
   #include <logdepthbuf_fragment>
   vec3 ro = uCamLocal;
@@ -838,8 +1007,9 @@ void main() {
   float t1 = hit.y;
   vec3 rdv = normalize(vView);
 #ifdef VFX_LOWRES
-  // half-res pass: this texel stands for full-res texel 2*xy (the composite matches depths to it)
-  float dS = uHasDepth > 0.5 ? texelFetch(uSceneDepth, ivec2(gl_FragCoord.xy) * 2, 0).r : 1e20;
+  // low-res pass: this texel stands for full-res texel F*xy + (F-1)/2 (the composite matches depths to it)
+  int lf = int(uLowF + 0.5);
+  float dS = uHasDepth > 0.5 ? texelFetch(uSceneDepth, ivec2(gl_FragCoord.xy) * lf + (lf - 1) / 2, 0).r : 1e20;
 #else
   float dS = vfxSceneDepth();
 #endif
@@ -887,12 +1057,12 @@ void main() {
     float cs = 0.5 + 0.5 * cos(6.2832 * ph);
     float dia = pow(cs, 8.0) * uCore.z * exp(-a / (lam * 4.0));
     float pinch = 1.0 - 0.35 * uCore.z * cs * cs * exp(-a / (lam * 4.0));
-    float rc = uGeom.y * (vac > 0.5 ? (0.85 + a * 0.22) : (0.78 + a * 0.05)) * pinch;
+    float rc = uGeom.y * (vac > 0.5 ? (0.8 + a * 0.12) : (0.78 + a * 0.05)) * pinch;
     float along = exp(-a / uCore.x) * smoothstep(sc0, sc0 + 0.55, sc) * smoothstep(coreEnd, coreEnd * 0.6, sc);
     float lenInt = min(rc * 1.7725 / sinT, uCore.x * 1.2);
     float g = exp(-dist * dist / (rc * rc)) * lenInt * along;
     float Tk = vac > 0.5 ? 3600.0 : mix(2900.0, 3500.0, dia);
-    vec3 col = vac > 0.5 ? vec3(0.45, 0.38, 1.0) : blackbody(Tk) * 1.4;
+    vec3 col = vac > 0.5 ? vec3(0.42, 0.5, 1.0) : blackbody(Tk) * 1.4;
     col = mix(col, vec3(0.3, 1.0, 0.38) * 1.2, uGreen[k]);
     float br = uCore.w * I * (0.5 + 1.9 * dia) * (1.0 + 0.6 * uGreen[k]);
     coreL += col * br * g;
@@ -903,11 +1073,19 @@ void main() {
   vec3 L = vec3(0.0);
   float T = 1.0;
   float Tcore = 1.0;
+  float cosS = dot(rd, uSunLocal);
+#ifdef PLUME_MVAC
+  // sub-micron condensate: weakly forward-scattering (near Rayleigh), so the plume shows from any side
+  float phase = mix(hgPhase(cosS, 0.35), 0.0796, 0.5);
+#else
+  float phase = mix(hgPhase(cosS, 0.62), 0.0796, 0.5);
+#endif
+  vec3 sunIn = uSunRad * phase;
+#ifdef PLUME_MVAC
+  vacMarch(ro, rd, t0, t1, jit, sunIn, L, T);
+#else
   // (in full retro the outer volume only holds the smooth, faint bow envelope: few steps suffice)
   float N = uRetro.x > 0.5 && uFlameB.y > 0.0 && uFlameB.y < uBounds.y * 0.8 ? max(8.0, floor(uSteps * 0.4)) : uSteps;
-  float cosS = dot(rd, uSunLocal);
-  float phase = mix(hgPhase(cosS, 0.62), 0.0796, 0.5);
-  vec3 sunIn = uSunRad * phase;
   // light from the plume core itself scattered by the expanded gas
   float coreI = vac > 0.5 ? 0.15 * mass : (uCore.w * 0.9 + uFlame.x * 4.0) * massF;
   vec3 coreCol = vac > 0.5 ? vec3(0.6, 0.5, 1.0) : vec3(1.0, 0.6, 0.3);
@@ -979,6 +1157,7 @@ void main() {
     T *= Tf;
   }
   if (coreT > t) Tcore = T;
+#endif
   L += coreL * Tcore;
   float alpha = 1.0 - T;
   vec3 relW = (transpose(mat3(viewMatrix)) * rdv) * mix(t0, t1, 0.3); // world pos rel. camera
@@ -1044,6 +1223,7 @@ uniform float uHasDepth;
 uniform sampler2D uLow;
 uniform vec2 uLowSize;
 uniform vec2 uLowTexel; // 1 / full texture size of the (shared, grow-only) low target
+uniform float uLowF;    // full-res pixels per low-res texel
 uniform vec3 uCamLocal;
 uniform vec4 uBounds;
 varying vec3 vLocal;
@@ -1052,7 +1232,9 @@ ${FRUSTUM_GLSL}
 void main() {
   #include <logdepthbuf_fragment>
   vec2 fc = gl_FragCoord.xy;
-  vec2 lc = fc * 0.5 - 0.5;
+  int lf = int(uLowF + 0.5);
+  ivec2 lo0 = ivec2((lf - 1) / 2);
+  vec2 lc = fc / uLowF - 0.5;
   vec2 i0f = floor(lc);
   vec2 f = lc - i0f;
   ivec2 i0 = ivec2(i0f);
@@ -1070,14 +1252,14 @@ void main() {
   if (hasD) {
     for (int k = 0; k < 4; k++) {
       ivec2 ii = clamp(i0 + ivec2(k & 1, k >> 1), ivec2(0), mx);
-      float dLo = texelFetch(uSceneDepth, ii * 2, 0).r;
+      float dLo = texelFetch(uSceneDepth, ii * lf + lo0, 0).r;
       float rel = abs(dLo - dHi) / max(min(dLo, dHi), 0.1);
       wd[k] = exp(-rel * 25.0) + 1e-6;
     }
   }
   if (min(min(wd.x, wd.y), min(wd.z, wd.w)) > 0.6) {
     // interior: wide (~4x4 tent) filter from 4 bilinear taps, also dissolves the march dither
-    vec2 p = fc * 0.5;
+    vec2 p = fc / uLowF;
     vec2 lo = vec2(1.0), hi = uLowSize - 1.0;
     vec4 c = texture2D(uLow, clamp(p + vec2(-0.75, -0.75), lo, hi) * uLowTexel)
            + texture2D(uLow, clamp(p + vec2( 0.75, -0.75), lo, hi) * uLowTexel)
@@ -1094,7 +1276,7 @@ void main() {
       ivec2 ii = clamp(i0 + ivec2(x, y), ivec2(0), mx);
       vec2 dd = abs(vec2(float(x), float(y)) - f);
       vec2 tw = max(1.6 - dd, 0.0);
-      float dLo = texelFetch(uSceneDepth, ii * 2, 0).r;
+      float dLo = texelFetch(uSceneDepth, ii * lf + lo0, 0).r;
       float rel = abs(dLo - dHi) / max(min(dLo, dHi), 0.1);
       float w = tw.x * tw.y * (exp(-rel * 25.0) + 1e-6);
       acc += texelFetch(uLow, ii, 0) * w;
