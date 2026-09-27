@@ -10,6 +10,7 @@ import { Smoother, arcPath, clamp, fmtFixed, fmtInt, h, s, setAttr, setText, tog
 import { displaySpeed } from '../core/frames';
 
 const GAUGE_SWEEP = 135; // arc from -135° to +135° (gap at the bottom)
+const OF = 2.56; // LOX / RP-1 mixture ratio (sim)
 
 class Gauge {
   readonly el: HTMLDivElement;
@@ -220,8 +221,15 @@ export class StageTelemetry {
     this.alt.update(b ? Math.max(0, b.altitude) / 1000 : NaN, dt, ok);
     this.engines.update(ok ? b : null);
     this.att.update(b, v.silhouette, dt);
-    const f = b && b.propCapacity > 0 ? b.propMass / b.propCapacity : 0;
-    // LOX and RP-1 drain together at O/F ≈ 2.36; show both from the same total (sim has no split)
-    this.props.update(ok ? f : 0, ok ? f : 0, dt);
+    // LOX / RP-1 from the sim's split (O/F 2.56) when present, else both from the total
+    let lox = 0, rp1 = 0;
+    if (b && b.propCapacity > 0) {
+      lox = rp1 = b.propMass / b.propCapacity;
+      if (typeof b.propLox === 'number' && typeof b.propFuel === 'number') {
+        lox = b.propLox / (b.propCapacity * (OF / (1 + OF)));
+        rp1 = b.propFuel / (b.propCapacity / (1 + OF));
+      }
+    }
+    this.props.update(ok ? lox : 0, ok ? rp1 : 0, dt);
   }
 }

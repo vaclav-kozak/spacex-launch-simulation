@@ -109,6 +109,14 @@ export class Captions {
       this.title('BOOSTER SPLASHDOWN', 'Stage 1 came down in the Pacific', true);
       return;
     }
+    if (e.type === 'FAIRING_SEP' && e.data?.damaged) {
+      this.title('FAIRING DEPLOY', 'Premature: payload exposed to aerodynamic heating', true);
+      return;
+    }
+    if (e.type === 'COUNTDOWN_HOLD' && e.data?.abort) {
+      this.title('LAUNCH ABORT', 'Engines shut down on the pad · recycling to T−60', true);
+      return;
+    }
     if (e.type === 'FLAMEOUT') {
       const who = e.body === 'S2' ? 'STAGE 2' : 'STAGE 1';
       this.caption(`${who} propellant depleted, engine flameout`, 'TELEMETRY', true);

@@ -36,9 +36,11 @@ async def main():
         pg.on('pageerror', lambda e: errs.append(f'[pageerror] {e}'))
         await pg.goto(f'{a.url}/?shot=1&{a.query}', wait_until='load', timeout=120000)
         await pg.wait_for_function('window.__app && window.__app.frameCount > 5', timeout=120000)
+        await pg.evaluate("window.__ev=[]; __app.ctx.events.on('*', e=>{ if(!['WARP_CHANGED','SETTINGS_CHANGED'].includes(e.type)) __ev.push([e.type, +e.t.toFixed(2), e.body||'', (e.data&&(e.data.id||e.data.outcome))||'', Math.round(performance.now())/1000])}); 1")
         await pg.evaluate('__app.actions.unlockAudio()')
         await pg.wait_for_function('__app.audio.ready === true', timeout=30000)
         await pg.wait_for_timeout(int(a.pre * 1000))
+        cap0 = await pg.evaluate('performance.now() / 1000')
         ok = await pg.evaluate('__app.audio.debugCaptureStart()')
         if not ok:
             sys.exit('capture not available')
@@ -57,6 +59,9 @@ async def main():
         raw = base64.b64decode(b64)
         open(a.out, 'wb').write(raw)
         json.dump(trace, open(a.out.replace('.wav', '.json'), 'w'), indent=0)
+        ev = await pg.evaluate('({events: __ev, callouts: (__app.audio.callouts && __app.audio.callouts.log) || []})')
+        ev['cap0'] = cap0  # performance.now() (s) at capture start: WAV time = event real time - cap0
+        json.dump(ev, open(a.out.replace('.wav', '.events.json'), 'w'), indent=0)
         print(f'{a.out}: {(len(raw) - 44) / 8 / int.from_bytes(raw[24:28], "little"):.2f}s captured, {len(trace)} trace samples')
         for e in errs[:12]:
             print('   ', e[:300])

@@ -359,7 +359,11 @@ export class AudioEngine {
     const key = this.readListener(listener, snap);
     const dtM = snap.t - this.lastT;
     const jump = this.lastPos.distanceTo(Lr.pos);
-    const expected = Lr.vel.length() * Math.max(0, dtM) + 60 + 400 * Math.abs(dtM);
+    // a camera riding its focus body moves at up to orbital speed (S2 ≈ 7.5 km/s = 120 m/frame):
+    // budget for that, or every frame reads as a cut and the dip-crossfade mutes everything
+    const focus = Lr.body ? snap.bodies[Lr.body] : undefined;
+    const vBudget = Math.max(Lr.vel.length(), focus ? focus.vel.length() * 1.5 : 0);
+    const expected = vBudget * Math.max(0, dtM) + 60 + 400 * Math.abs(dtM);
     let switched = false;
     if (key !== this.lastKey || jump > expected) {
       switched = true;

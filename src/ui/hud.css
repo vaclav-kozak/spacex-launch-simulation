@@ -57,6 +57,23 @@
 }
 .band, .captions, .evt-title { text-shadow: 0 0 10px rgba(0, 0, 0, 0.35); }
 
+/* imagery credit (EOX Sentinel-2 cloudless is CC BY 4.0): tiny, under the stage-2 block */
+.credit {
+  position: absolute;
+  right: 16px;
+  bottom: 3px;
+  max-width: 420px;
+  font: 400 8px/1.3 var(--f-ui);
+  letter-spacing: 0.02em;
+  text-align: right;
+  white-space: pre-line;
+  color: rgba(255, 255, 255, 0.34);
+  text-shadow: 0 0 4px rgba(0, 0, 0, 0.6);
+}
+.credit a { color: inherit; text-decoration: none; pointer-events: auto; }
+.credit a:hover { color: rgba(255, 255, 255, 0.8); }
+.credit span { white-space: pre; }
+
 /* ------------------------------------------------------------ stage telemetry */
 .stage {
   position: absolute;
@@ -152,6 +169,11 @@
   dominant-baseline: central;
 }
 .tl-m.done .tl-label { fill-opacity: 0.5; }
+.tl-label { transition: fill-opacity 0.6s; }
+.tl-m.old .tl-label { fill-opacity: 0; }
+.tl-m.old .tl-dot { stroke-opacity: 0.6; fill-opacity: 0.6; }
+.tl-m.cancelled .tl-dot { stroke: var(--red); stroke-dasharray: 2 2; fill: rgba(0, 0, 0, 0.4); }
+.tl-m.cancelled .tl-label { fill-opacity: 0.35; text-decoration: line-through; }
 .tl-leader { stroke: var(--ink3); stroke-width: 0.8; display: none; }
 .tl-leader.show { display: inline; }
 
@@ -194,7 +216,10 @@
   color: var(--amber);
   opacity: 0;
 }
+.clk-state { transition: opacity 0.4s; white-space: nowrap; }
 .clk-state.show { opacity: 1; }
+.clk-state.alert { color: var(--red); }
+.clock.alert { color: var(--red); animation: clk-blink 0.8s steps(1, end) infinite; }
 
 /* ------------------------------------------------------------ captions */
 .captions {
@@ -336,6 +361,7 @@
 .f9ui.compact .st-icons, .f9ui.compact .props { display: none; }
 .f9ui.narrow .stage { display: none; }
 .f9ui.narrow .captions { left: 24px; right: 24px; max-width: none; }
+.captions.tight .cap-text { font-size: 16.5px; }
 .f9ui.narrow .sp-main { font-size: 20px; letter-spacing: 0.22em; }
 .f9ui.narrow .sp-sub { display: none; }
 @media (max-width: 900px) {

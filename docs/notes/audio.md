@@ -53,19 +53,41 @@ Engine sound needs no events. It comes from the snapshot:
 
 A change in the number of running engines (after the sound's travel delay) produces a TEA-TEB pop or a shutdown chuff. If no `SONIC_BOOM` event arrives within 30 s of S1 decelerating through Mach 1, audio synthesises the boom itself.
 
+## Verified against the real sim (round 2)
+
+Captures (`tools/audio/capture.py`) are in `shots/audio/r2_*.wav`. Each has a `.json` trace of `audio.debug` and an `.events.json`. The `.events.json` holds the sim events with real time (`wav@ = t − cap0`) and the CalloutPlayer log (`audio.callouts.log`: play/drop, event time, lag, clip duration).
+
+| Window | Capture | Result |
+|---|---|---|
+| Countdown + ignition, pad cam | `r2_cd_pad` | Callouts strictly sequential, no overlaps. Ignition heard 1.12 s after the event at 381 m (r/c). Peak 0.89, RMS −16 dBFS, no clipping. `lc_2` starts 0.5 s late because `lc_ignition` (1.7 s) is still playing (accepted). |
+| Liftoff, long lens | `r2_lo_long` | Engine arrives about 5.6 s after ignition at 1.9 km (r/c). |
+| Max-Q, chase | `r2_maxq` | `lc_maxq` plays on the event. The sim emits `MAX_Q` about 12.7 s after the real peak (see requests). The chase listener falls 64 → 2460 m behind at T+72 (a camera issue), so the level drops to −44 dB. |
+| Stage sep, S1 onboard | `r2_sep_onb` | MECO cuts the structure-borne sound with a chuff, then the stage-sep clunk. S2's MVac is not heard on the S1 onboard cam (correct: vacuum, different body). |
+| Entry burn, S1 onboard | `r2_entry_onb` | Structure-borne `onboardS` 0.60 = 3 engines (2.74 MN). Level −13…−17 dBFS, strong 15–60 Hz. Callouts `lc_entry_start` → `host_entry` → `lc_entry_end` in order with 0.02 s lag. Quiet RCS puffs in the coast before the burn. |
+| Boom → landing burn → touchdown, deck cam | `r2_deck2` | `SONIC_BOOM` at t 480.64 is heard at t 493.17: r 4151 m, delay 12.52 s = r/c, gain 0.82, peak 0.88, no clipping. The landing burn is 1 engine (650 kN), heard 8 s after `LANDING_BURN_START` at 2.7 km, with the camera AGC lifting it (+25 dB → +5 dB). Touchdown thump lands on `TOUCHDOWN`, and `lc_landed` / `host_landed` follow without overlap. |
+| SECO, S2 onboard_engine | `r2_seco` | MVac is structure-borne only: onboard rumble until SECO, chuff, then silence apart from callouts (the external S2 emitter is at −250 dB in vacuum). |
+
+**Fixed in round 2**
+- **Silence at orbital speed.** The listener cut detector (a position jump larger than the expected motion) reset the listener velocity on every cut. A camera riding S2 at 7.5 km/s moves about 120 m per frame, so every frame read as a camera cut and the dip-crossfade muted everything. S2 onboard went silent from about T+8:50. The jump budget now includes the focus body's speed.
+- **Capture tooling.** `capture.py` logs events and the callout play/drop log, so callout timing can be checked against the `CALLOUT` stream.
+
+**Checked, no change needed**
+- **`FAIRING_SEP` as a single event** (`data.bodies`) gives one clunk, structure-borne on the S2 stack.
+- **"Fairing" pronunciation.** `lc_fairing_sep` and `lc_manual_fairing` transcribe as "Fearing" with Whisper base.en. With small.en they transcribe as "faring", a homophone of "fairing". Kokoro's phonemes are correct (`fˈɛɹɪŋ`), and no respelling changes base.en's guess; only adding context ("payload fairing") does. So there is no respell.
+- **Capture length.** A single `debugCaptureStart/Stop` returns at most about 30 s.
+
 ## Requests to other areas
 
 1. **sim:**
-   - Keep `snap.paused` / `snap.countdownHeld` updated even when `advance()` returns early. The placeholder only updates them in `compute()`; audio has the stopped-clock fallback, but the flag is cleaner.
-   - Please emit `SONIC_BOOM` with `body: 'S1'` at the Mach-1 crossing on descent.
-   - Emit `TOUCHDOWN` with `data.outcome` as documented in `core/types.ts`.
-   - Please fill `vel` (Doppler), `mach` / `dynPressure` (onboard buffet and aero rush) and `engines[].spool` (spool-up sound). The placeholder leaves `vel`, `mach` and `dynPressure` at zero, so onboard aero noise is silent for now.
+   - `MAX_Q` is emitted when q falls below 0.9 × peak with `t` back-dated to the peak. It therefore arrives about 12.7 s after its own `t`, and so do `lc_maxq` / `host_maxq` (for example, peak at T+1:11, voice at T+1:24). Could the sim emit it at the peak, or have the callout use the emission time?
+   - `lc_holding` is scheduled on mission time, so it never plays during a hold.
 2. **sim (callouts):**
    - `src/sim/callouts.ts` is the single source of spoken text.
    - After adding or changing a line, run `tools/audio/.venv/bin/python tools/audio/gen_callouts.py`, or ask audio to. An unknown id or text still plays through `speechSynthesis`.
 3. **cameras:**
    - Audio treats `view.onboard === true` as structure-borne listening.
    - The OCISLY deck cam is airborne (`onboard: false`) with `mode === 'deck'`, and that is intended.
+   - The S1 chase cam is left kilometres behind at max-Q, which makes it audibly distant (see `r2_maxq`).
 
 ## Housekeeping
 

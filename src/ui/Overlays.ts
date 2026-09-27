@@ -27,7 +27,7 @@ const HELP: [string[], string][][] = [
   [
     [['Space'], 'Pause / resume'],
     [['L'], 'Liftoff now (skip countdown)'],
-    [['H'], 'Hold / resume countdown'],
+    [['H'], 'Hold / resume countdown (T\u22123\u20260: abort)'],
     [['S'], 'Stage separation (manual)'],
     [['F'], 'Fairing separation (manual)'],
     [['1', '\u2013', '6'], 'Time warp 1\u00d7 2\u00d7 4\u00d7 8\u00d7 30\u00d7 100\u00d7'],
@@ -41,23 +41,27 @@ const HELP: [string[], string][][] = [
     [['P'], 'Photo mode'],
     [['R'], 'Replay touchdown'],
     [['K'], 'Manual landing on / off'],
-    [['W', 'S'], 'Manual: throttle up / down'],
-    [['\u2190', '\u2191', '\u2193', '\u2192'], 'Manual: gimbal (A / D also yaw)'],
-    [['X'], 'Manual: engine cut'],
+    [['W', 'S'], 'Manual: throttle lever (lit 40\u2013100 %, 3 starts)'],
+    [['\u2190', '\u2191', '\u2193', '\u2192'], 'Manual: steer over the deck map (A / D = \u2190 \u2192)'],
+    [['X'], 'Manual: engine off (lever to 0)'],
   ],
 ];
 
 export class HelpOverlay {
   readonly el: HTMLDivElement;
-  constructor(onClose: () => void) {
+  constructor(onClose: () => void, credits: [string, string][] = []) {
     const cols = HELP.map((col) => h('dl', {}, ...col.flatMap(([k, d]) => [
       h('dt', {}, ...k.map((x) => (x === '\u2013' ? h('span', { class: 'to', text: x }) : h('kbd', { text: x })))),
       h('dd', { text: d }),
     ])));
     const close = h('button', { class: 'dlg-x', type: 'button', 'aria-label': 'Close', text: '×' });
     close.addEventListener('click', onClose);
+    const cred = credits.length
+      ? h('div', { class: 'help-credits' }, h('h3', { text: 'CREDITS' }),
+        h('dl', {}, ...credits.flatMap(([k, v]) => [h('dt', { text: k }), h('dd', { text: v })])))
+      : null;
     this.el = h('div', { class: 'dlg-wrap help', role: 'dialog', 'aria-label': 'Keyboard shortcuts' },
-      h('div', { class: 'dlg' }, close, h('h2', { text: 'KEYBOARD' }), h('div', { class: 'help-cols' }, ...cols)));
+      h('div', { class: 'dlg' }, close, h('h2', { text: 'KEYBOARD' }), h('div', { class: 'help-cols' }, ...cols), cred));
     this.el.addEventListener('pointerdown', (e) => { if (e.target === this.el) onClose(); });
   }
   set open(v: boolean) { toggleClass(this.el, 'open', v); }
@@ -70,7 +74,7 @@ export class SummaryModal {
   private sub: HTMLDivElement;
   private list: HTMLDListElement;
   private bReplay: HTMLButtonElement;
-  constructor(private actions: AppActions, private ui: { replay(): void; close(): void }) {
+  constructor(private actions: AppActions, credit: string, private ui: { replay(): void; close(): void }) {
     this.head = h('h2', { class: 'sum-head' });
     this.sub = h('div', { class: 'sum-sub' });
     this.list = h('dl', { class: 'sum-list' });
@@ -83,7 +87,8 @@ export class SummaryModal {
     this.el = h('div', { class: 'dlg-wrap summary', role: 'dialog', 'aria-label': 'Mission summary' },
       h('div', { class: 'dlg' },
         h('div', { class: 'sum-kicker', text: 'MISSION SUMMARY' }), this.head, this.sub, this.list,
-        h('div', { class: 'sum-btns' }, this.bReplay, btn('RESTART', () => actions.restart()), btn('CLOSE', () => ui.close(), 'quiet'))));
+        h('div', { class: 'sum-btns' }, this.bReplay, btn('RESTART', () => actions.restart()), btn('CLOSE', () => ui.close(), 'quiet')),
+        h('div', { class: 'sum-credit', text: credit })));
     this.el.addEventListener('pointerdown', (e) => { if (e.target === this.el) ui.close(); });
   }
   show(headline: string, sub: string, lines: { label: string; value: string }[], canReplay: boolean, bad: boolean): void {

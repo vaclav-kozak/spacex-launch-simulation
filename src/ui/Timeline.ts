@@ -34,6 +34,8 @@ const DISPLAY: Partial<Record<TimelineMarker['type'], string>> = {
 /** time -> angle compression: near events spread out, far ones bunch toward the ends */
 const TAU = 42; // s
 const WINDOW = 700; // s mapped to the arc end
+/** done markers older than this lose their label (dot stays) */
+const OLD_LABEL_AGE = 200; // s
 
 export class Timeline {
   readonly el: HTMLDivElement;
@@ -138,15 +140,17 @@ export class Timeline {
     return me;
   }
 
-  update(snap: SimSnapshot, opts: { held: boolean; paused: boolean; warp: number }): void {
+  update(snap: SimSnapshot, opts: { held: boolean; alert: boolean; state: string; paused: boolean; warp: number }): void {
     this.frame++;
     const t = snap.t;
     const { sign, body } = fmtClock(t);
     setText(this.clockSign, sign);
     setText(this.clockBody, body);
     toggleClass(this.clockEl, 'held', opts.held);
-    setText(this.stateEl, opts.held ? 'COUNTDOWN HOLD' : '');
-    toggleClass(this.stateEl, 'show', opts.held);
+    toggleClass(this.clockEl, 'alert', opts.alert);
+    if (opts.state) setText(this.stateEl, opts.state); // keep the old text while it fades out
+    toggleClass(this.stateEl, 'show', !!opts.state);
+    toggleClass(this.stateEl, 'alert', opts.alert);
     setText(this.warpEl, opts.warp !== 1 ? `${opts.warp}×` : '');
     toggleClass(this.warpEl, 'show', opts.warp !== 1);
     if (opts.warp !== this.lastWarp) {
@@ -227,7 +231,10 @@ export class Timeline {
       }
       me.done = m.done;
       toggleClass(me.g, 'done', m.done);
-      toggleClass(me.g, 'near', !m.done && m.t - t < 12 && m.t - t > -2);
+      toggleClass(me.g, 'cancelled', !!m.cancelled && !m.done);
+      toggleClass(me.g, 'near', !m.done && !m.cancelled && m.t - t < 12 && m.t - t > -2);
+      // long-past events bunch up at the left end: keep their dots, drop the labels
+      toggleClass(me.g, 'old', m.done && t - m.t > OLD_LABEL_AGE);
     }
   }
 }

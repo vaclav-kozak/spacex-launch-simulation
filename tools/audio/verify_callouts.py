@@ -3,7 +3,7 @@
 
 Usage: tools/audio/.venv/bin/python tools/audio/verify_callouts.py [--min 0.8]
 Prints every clip whose transcript word-matches its text below --min (after norm_key). Expected
-residue: compound splits ('lift off', 'shut down'), 'SECO' (respelled 'Seeko'), 'Fairing'.
+residue: compound splits ('lift off', 'shut down'), 'SECO' (respelled 'Seeko'), 'Fairing' (base.en hears 'Fearing', small.en hears the homophone 'faring': pronunciation is correct).
 """
 import argparse, difflib, json, os, sys
 

@@ -10,6 +10,9 @@ export const WARP_LEVELS = [1, 2, 4, 8, 30, 100] as const;
 export interface ControlState {
   canLiftoff: boolean;
   held: boolean;
+  /** HOLD / RESUME / ABORT (T−3…T−0) / RECYCLING */
+  holdLabel: string;
+  holdKind: '' | 'active' | 'danger';
   canHold: boolean;
   canStageSep: boolean;
   canFairingSep: boolean;
@@ -80,12 +83,16 @@ const compass = (deg: number) => COMPASS[Math.round((((deg % 360) + 360) % 360) 
 const SPEAKER_ON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor"/><path d="M16 8.5a5 5 0 0 1 0 7M18.6 6a8.6 8.6 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
 const SPEAKER_OFF = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor"/><path d="M16.5 9.5l5 5M21.5 9.5l-5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
 const PAUSE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h3.2v14H7zM13.8 5H17v14h-3.2z" fill="currentColor"/></svg>';
+const SLIDERS = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="15" cy="7" r="2.2" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="9" cy="17" r="2.2" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>';
+const CHEVRON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9.5l6 6 6-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const PREF_KEY = 'f9ui.cpanel';
 const PLAY = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5l11 7-11 7z" fill="currentColor"/></svg>';
 
 export class Controls {
   readonly el: HTMLDivElement;
   private body: HTMLDivElement;
-  private collapsed = false;
+  private toggleBtn: HTMLButtonElement;
+  private collapsed = true;
   private bLiftoff: HTMLButtonElement;
   private bHold: HTMLButtonElement;
   private bStage: HTMLButtonElement;
@@ -120,10 +127,14 @@ export class Controls {
     this.hdrPause = hdrBtn(PAUSE, 'Pause (Space)', () => actions.togglePause());
     this.hdrMute = hdrBtn(SPEAKER_OFF, 'Mute (M)', () => ui.toggleMute(), 'mute');
     const help = hdrBtn('<span>?</span>', 'Keyboard shortcuts (?)', () => ui.toggleHelp(), 'help');
-    const coll = hdrBtn('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9.5l6 6 6-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
-      'Show / hide controls', () => this.setCollapsed(!this.collapsed), 'coll');
-    const header = h('div', { class: 'cp-head' },
-      h('span', { class: 'cp-title', text: 'MISSION CONTROL' }), this.hdrWarp, this.hdrPause, this.hdrMute, help, coll);
+    // the panel title doubles as the show/hide toggle; collapsed it is a compact "CONTROLS" tab
+    this.toggleBtn = h('button', { class: 'cp-toggle', type: 'button', 'aria-expanded': 'false', title: 'Show / hide mission controls' },
+      h('span', { class: 'cp-ico', html: SLIDERS }),
+      h('span', { class: 'cp-title' }, h('span', { class: 'cp-t-full', text: 'MISSION CONTROL' }), h('span', { class: 'cp-t-short', text: 'CONTROLS' })),
+      h('span', { class: 'cp-chev', html: CHEVRON }));
+    this.toggleBtn.addEventListener('mousedown', (e) => e.preventDefault());
+    this.toggleBtn.addEventListener('click', () => this.setCollapsed(!this.collapsed, true));
+    const header = h('div', { class: 'cp-head' }, this.toggleBtn, this.hdrWarp, this.hdrPause, this.hdrMute, help);
 
     // countdown
     this.bLiftoff = button('LIFTOFF NOW', 'L', () => actions.liftoffNow(), 'primary');
@@ -167,15 +178,19 @@ export class Controls {
 
     this.tod.set(st.timeOfDay);
     this.quality.set(st.quality);
+    // collapsed by default so the picture stays clean; the user's choice is remembered
     let pref: string | null = null;
-    try { pref = localStorage.getItem('f9ui.controls'); } catch { /* storage blocked */ }
-    this.setCollapsed(pref ? pref === 'collapsed' : window.innerHeight < 760 || window.innerWidth < 900);
+    try { pref = localStorage.getItem(PREF_KEY); } catch { /* storage blocked */ }
+    this.setCollapsed(pref !== 'open');
+    if (pref === null) this.el.classList.add('hint'); // one-time attention pulse on the first visit
   }
 
-  setCollapsed(c: boolean): void {
+  setCollapsed(c: boolean, persist = false): void {
     this.collapsed = c;
     toggleClass(this.el, 'collapsed', c);
-    try { localStorage.setItem('f9ui.controls', c ? 'collapsed' : 'open'); } catch { /* ignore */ }
+    this.toggleBtn.setAttribute('aria-expanded', String(!c));
+    this.el.classList.remove('hint');
+    if (persist) try { localStorage.setItem(PREF_KEY, c ? 'collapsed' : 'open'); } catch { /* ignore */ }
   }
   get isCollapsed(): boolean { return this.collapsed; }
 
@@ -183,8 +198,10 @@ export class Controls {
     const en = (b: HTMLButtonElement, on: boolean) => { if (b.disabled === on) b.disabled = !on; };
     en(this.bLiftoff, st.canLiftoff);
     en(this.bHold, st.canHold);
-    setText(this.bHold.firstChild as HTMLElement, st.held ? 'RESUME' : 'HOLD');
-    toggleClass(this.bHold, 'active', st.held);
+    setText(this.bHold.firstChild as HTMLElement, st.holdLabel);
+    toggleClass(this.bHold, 'active', st.holdKind === 'active');
+    toggleClass(this.bHold, 'danger', st.holdKind === 'danger');
+    this.bHold.title = st.holdLabel === 'ABORT' ? 'Engines are lit: a hold now aborts the launch and recycles the count' : 'Hold / resume the countdown';
     en(this.bStage, st.canStageSep);
     en(this.bFairing, st.canFairingSep);
     this.warp.set(st.warp);

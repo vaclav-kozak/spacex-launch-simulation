@@ -33,6 +33,7 @@ interface QItem {
   t: number; // mission time of the event
   real: number; // real time queued (s)
   count: boolean; // countdown number: superseded by any newer count
+  id: string;
 }
 
 export class CalloutPlayer {
@@ -51,6 +52,12 @@ export class CalloutPlayer {
   /** debug: last started line and number of stale-dropped items */
   lastPlayed = '';
   dropped = 0;
+  /** debug ring (last 40): started / dropped lines with mission-time lag and clip length */
+  log: { what: 'play' | 'drop'; id: string; evT: number; atT: number; lagR: number; dur: number }[] = [];
+  private note(what: 'play' | 'drop', q: QItem, missionT: number, realNow: number, dur: number): void {
+    this.log.push({ what, id: q.id || q.text.slice(0, 24), evT: +q.t.toFixed(2), atT: +missionT.toFixed(2), lagR: +(realNow - q.real).toFixed(2), dur: +dur.toFixed(2) });
+    if (this.log.length > 40) this.log.shift();
+  }
 
   async loadManifest(base: string): Promise<void> {
     this.base = base;
@@ -142,7 +149,7 @@ export class CalloutPlayer {
     const voice = d.voice === 'host' ? 'host' : 'lc';
     const lines = this.resolve(typeof d.id === 'string' ? d.id : undefined, text, voice);
     const count = !!lines && lines.length === 1 && lines[0].kind === 'count';
-    this.queue.push({ lines, text, voice, t: e.t, real: realNow, count });
+    this.queue.push({ lines, text, voice, t: e.t, real: realNow, count, id: typeof d.id === 'string' ? d.id : '' });
     if (this.queue.length > 12) this.queue.shift();
   }
 
@@ -170,7 +177,9 @@ export class CalloutPlayer {
   tick(ac: BaseAudioContext, out: AudioNode, missionT: number, realNow: number, warp: number, paused: boolean): void {
     if (paused) return;
     // drop stale items anywhere in the queue
-    for (let i = this.queue.length - 1; i >= 0; i--) if (this.stale(this.queue[i], missionT, realNow, warp)) { this.queue.splice(i, 1); this.dropped++; }
+    for (let i = this.queue.length - 1; i >= 0; i--) {
+      if (this.stale(this.queue[i], missionT, realNow, warp)) { this.note('drop', this.queue[i], missionT, realNow, 0); this.queue.splice(i, 1); this.dropped++; }
+    }
     if (this.isBusy(ac) || !this.queue.length) return;
     const q = this.queue[0];
     if (q.lines) {
@@ -191,10 +200,12 @@ export class CalloutPlayer {
       }
       this.busyUntil = t;
       this.lastPlayed = `${q.text}@${missionT.toFixed(2)}`;
+      this.note('play', q, missionT, realNow, t - ac.currentTime);
       return;
     }
     this.queue.shift();
     this.lastPlayed = `(speech) ${q.text}@${missionT.toFixed(2)}`;
+    this.note('play', q, missionT, realNow, -1);
     this.speak(q);
   }
 
