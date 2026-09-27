@@ -1,0 +1,10 @@
+.git
+.claude
+.cache
+node_modules
+dist
+shots
+tools
+blender
+docs
+*.log
