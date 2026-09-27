@@ -43,6 +43,16 @@ focus body), `fillLight`, `hemi` (used only until the first env probe exists), `
   automatically. **vfx:** smoke/plume shaders lit by `aerialSunColor()` should multiply by
   `aerialSunVisibility(rel)` (pad smoke / low exhaust while the focus is sunlit high up).
 
+* **New (round 3):** `vec3 aerialLightTransRatio(vec3 rel, vec3 lightDirW)` = atmospheric transmittance toward
+  the light at the fragment divided by the transmittance at the view's focus (clamped 0..4). The key light
+  colour is evaluated at the focus, so with a focus at 30 km and a pad-level fragment at sunrise the ground was
+  lit with the unreddened high-altitude sun (a visible seam where terrain met the globe). Patched lit
+  materials apply it per directional light automatically, together with `aerialCloudShadow` and
+  `aerialEarthShadow`. New uniforms: `uAerialTransLUT` (the atmosphere transmittance LUT, set by env) and
+  `uAerialLightRef` (xyz = up at the focus, w = focus altitude m; w < 0 switches the ratio off). The
+  material cache key is now `|aerial4` / `|aerialA4`. Custom shaders lit by `aerialSunColor()` can multiply by
+  it the same way; it is 1 at the focus.
+
 ## Look values for post (`look.ts`)
 `envLook.night` (0 day/twilight .. 1 night, same ramp as the moon/star night gain) and
 `envLook.focusDist` (Map view id -> camera-to-focus-body distance, m, written in beforeViewRender).
@@ -58,12 +68,46 @@ Only post reads them.
   booster at 75 km); now the twilight sky is blue overhead with an orange western horizon and grazing
   sunlight goes orange (tangent 12-16 km) -> white/lavender (25-35 km) -> white.
 
+* **Twilight horizon band (round 3, checked, no change):** at the twilight epoch the sky already shows the
+  orange sun-side band (WSW, az ~246) and a pink Belt of Venus over the dark Earth-shadow band opposite the
+  sun (ENE), from the ground up to ~60 km camera altitude. At ~110 km the sun is above the limb and the limb
+  reads white-blue (correct). The in-app cameras at T+100..200 mostly look up and see no horizon, so the band
+  is rarely on screen (see requests).
+
+## Night lighting (round 3)
+* The moon light is graded cool: `MOON_TINT = [0.8, 0.97, 1.22]` in `Environment.ts` scales `moonColor` and
+  the key light when the moon is the key. Luminance is about the physical value. The moon disc keeps its
+  neutral colour. The night onboard view at ~110 km is smooth, dim and blue-grey, with no sparkle.
+* Globe night lights now fade on the **real sun elevation** (`uAerialSunDir`). They used `uLightDir`, which is
+  the moon on moonlit nights, so the globe switched its city lights off while the terrain kept them (seam).
+* **City lights (`nightCity.ts`):** `earth_night_city.jpg` is a ~460 m/px Black Marble crop of the California
+  coast (SF Bay .. San Diego, `NIGHT_CITY_BOX = (-123.5, 32.0, -115.0, 38.4)`, lon0/lat0/lon1/lat1). It replaces
+  the 1.3 km regional night texture inside the box on the globe (`earth.ts`) and on both terrain patches
+  (`terrain.ts`, emissive). Below ~300 m pixel footprint a mean-preserving street pattern is multiplied into
+  the lit areas: the 1-mile arterial grid (45 m wide), 400 m block variation and 2.5 km districts. It is
+  box-filtered by the footprint, so from altitude the texture is unchanged and nothing sparkles.
+  `nightCityUniforms` (`uNightCity`, `uCityBox`) + `NIGHT_CITY_GLSL` (`vec3 nightCity(nl, lonDeg, latDeg,
+  footprintM)`) can be reused by any shader. `uCityBox` stays off-planet until the texture has loaded.
+
 ## Clouds (`clouds.ts`, `cloudWeather.ts`)
 * Volumetric clouds are a coastal marine stratocumulus deck, roughly 0.6–1.5 km thick near the coast.
   The deck burns off a few km inland and breaks up offshore, and scattered cumulus (tops up to ~3.4 km)
   lie further out. The shell is `CLOUD_SHELL = {bottom: 560, top: 3400}` m.
   Above ~60 km camera altitude, or beyond `clouds.maxDist`, the globe draws a matching 2D layer from the same weather
   model.
+* **Weather model (round 3, fixes the visible tiling from altitude):** `cloud_weather.bin` is now 1024² and is
+  sampled at three scales: fine (80 km tile, ~2 km closed cells), coarse (347 km tile rotated 37°: ~9 km closed
+  cells, ~30 km open cells, 20-120 km coverage patches) and a regime field (610 km tile rotated −24°: patches, large
+  clear areas). The fine lookup is domain-warped by the regime field, so no tile period lines up.
+  * Near the coast the cells are small; offshore they grow.
+  * Where the deck is partial, the organisation switches from closed cells (cloud with thin rifts) to open cells
+    (rings of cumulus around clear centres).
+  * Beyond ~90-320 km from the pad the synoptic coverage fades to the Blue Marble July cloud composite, so the view from
+    orbit shows the real marine layer off California / Baja.
+  * All thresholds are footprint-filtered: a cell smaller than the pixel returns its expected coverage, not a
+    sub-pixel speckle.
+  * `cldRegime / cldWeather / cldCover2D` are shared by the volumetric march and the globe's 2D layer (`earth.ts`),
+    so the hand-off at 60 km / `maxDist` matches.
 * The clouds render in the **LAYER_VFX pass** as two fullscreen meshes in `ctx.scene`:
   * `env.clouds` has renderOrder −100 and blends premultiplied over the HDR target. Its onBeforeRender runs the half-res
     ray march plus a temporal resolve, using `ctx.sceneDepth`.
@@ -77,6 +121,31 @@ Only post reads them.
 * Cost on an RTX 5070 Ti at 1080p is ~0.3–0.6 ms (march + resolve + composite + shadow map + probe), which
   is ~2–4 ms on a GTX 1650. Quality levels 0..3 change the steps (24/32/44/60), resolution (¼ at q0, ½ otherwise),
   shadow map size (256/384/512/1024) and distance.
+* The cloud shadow map (0.03–0.25 ms per render on the 5070 Ti) is re-rendered **every 4th frame at q0 and every 2nd
+  at q1** (every frame at q2+). It is re-rendered sooner when the camera leaves the middle 8 % of the box, the box
+  size changes > 4 %, the key light turns, or the wind offset jumps (seek). Between renders the stored map is
+  reused at its stored world position, so nothing slides.
+
+## Perf (round 3, RTX 5070 Ti, 1080p, `scripts/perf.py`, GPU ms)
+The GPU is shared with other agents' headless browsers, so readings jump by up to 1 ms between runs. The
+values below are the lower of two runs.
+
+| View | q0 scene | q2 scene | q0 post | q2 post |
+|---|---|---|---|---|
+| `S1:pad:wide` T+8 | 0.56 | 1.04 | 0.56 | 0.86 |
+| `S1:onboard` T+196 | 0.2–1.2 | 1.35 | 0.87 | 1.14 |
+| `S1:chase` T+77 | 0.85 | 0.43 | 0.67 | 0.87 |
+| `SHIP:deck` T+505 | 1.09 | 2.15 | 0.50 | 0.70 |
+| `S1:onboard` T+330 night | 1.16 | 1.12 | 1.06 | 0.84 |
+
+* `scene` is everything in the opaque + VFX passes: env, models and VFX.
+* Env pre-pass (`beforeViewRender`: LUTs, probe, cloud shadow, FFT) costs 0.03–0.1 ms without clouds and 0.3–0.7 ms
+  with volumetric clouds. The clouds cost ~0.4 ms of `scene` at q0 and ~1.1 ms at q2 (deck view).
+* Estimated env total on the 5070 Ti is ~0.7–1.3 ms at q0 and ~1.5–2.5 ms at q2. Scaled ×5–6 for a GTX 1650,
+  that is ≈ 3.5–7 ms at q0, around the 5 ms budget, and over budget at q2.
+* On a 1650 the main lever is `clouds.maxDist` / march steps at q0. The rest of env is cheap.
+* Wrapping `env.beforeViewRender` or cloud passes in the `GpuTimer` corrupts the `scene` reading (≈ 10 ms at
+  pad q0). Timer queries do not nest, so time sub-passes only in isolation.
 
 ## Terrain / ocean layering
 * The terrain meshes (T1 40 km, T2 400 km, both from DEM) are drawn first. The Earth surface shader draws the sea
@@ -84,9 +153,28 @@ Only post reads them.
   docs/assets/env.md, `coast` step).
 
 ## Known issues / requests
-* City lights (`earth_night_reg.jpg`, 2048² over 24x24 deg = 1.3 km/px from the 3 km Black Marble) read as
-  a smooth golden glow from altitude (LA basin at T+150 night looks like sunlit cloud). A 500 m Black
-  Marble crop of the SoCal coast would fix it (asset task).
+* **VFX (twilight pink plume, `shots/pc3/after/tw_ll145.png`):** the sky is not pink. With the VFX root hidden,
+  the same frame (long_lens:ground, T+145, twilight) is deep blue, display RGB ≈ (25, 40, 75). The salmon
+  colour is the plume lit by `sunRadianceAt()` in `src/render/vfx/common.ts`, which still uses the
+  single-wavelength ozone `BO = [0.65, 1.881, 0.085] e-6`. That set is what made long ozone paths magenta
+  before env switched to the channel-integrated values (see Sky above).
+  * At the S1 focus (62 km, sun −6.4°, grazing tangent ≈ 22 km, inside the ozone layer), vfx gets sun colour
+    **(1.0, 0.35, 0.58)** (normalised), which reads salmon-pink.
+  * Env's `ctx.lighting.sunColor` / `transmittanceCPU` at the same point is **(0.84, 0.68, 1.0)**, a white-lavender
+    that matches the blue-white twilight jellyfish.
+  * Fix: import `ATMO` from `render/env/atmosphere`, use `BO = ATMO.ozone`, and add the boundary-layer aerosol
+    (`blExt`, `blH`). Or call the exported `transmittanceCPU(h, mu)` (48-step, soft horizon) and multiply
+    it by the vfx Earth-shadow term.
+* **VFX:** the long-lens view at twilight T+150 (`tw150_ll`) is grey, from plume haze. It is not the sky. The grey
+  haze at the top of the T+151 morning chase is also plume or VFX.
+* **Cameras:** to show the twilight band, frame the WSW horizon (az ~246, sun side, orange band) or the ENE
+  horizon (Belt of Venus over the Earth shadow) for a few seconds at T+100..200 in the twilight preset. Current
+  cameras look up at the rocket and never catch it.
+* Env (open):
+  * Toward the horizon, the open-cell holes in the 2D cloud layer read as similar-sized ovals.
+  * The LA core in the city lights is saturated. That is the Black Marble visualisation; the street pattern
+    breaks it up only below ~300 m footprint.
+  * In the `k60_side` twilight sky there is a faint dark-brown Earth-shadow smudge on the limb.
 * App: `THREE.WebGLShadowMap: PCFSoftShadowMap has been removed` warning. This comes from `renderer.shadowMap.type` in
   App.ts (not env). Use `THREE.PCFShadowMap` (soft filtering is the default in r18x) to silence it.
 * The cloud transmittance in `ctx.lighting.sunColor` is 1–2 frames late (async readback).

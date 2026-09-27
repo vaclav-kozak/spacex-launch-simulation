@@ -24,7 +24,7 @@
 // by aerialSunVisibility(rel) (smoke on the ground while the focus is sunlit high up).
 
 import * as THREE from 'three';
-import { AERIAL_LOOKUP_GLSL } from './atmosphere';
+import { AERIAL_LOOKUP_GLSL, ATMO } from './atmosphere';
 import { CLOUD_SHELL } from './cloudWeather';
 import { EARTH_RADIUS } from '../../core/constants';
 
@@ -47,6 +47,11 @@ export const aerialUniforms = {
   uCloudShadowBox: { value: new THREE.Vector4(0, 0, 1, 0) },
   /** key light direction (W) the map was traced along */
   uCloudShadowDir: { value: new THREE.Vector3(0, 1, 0) },
+  // directional light colours are evaluated at the view's focus (ctx.lighting); patched lit materials
+  // rescale them per fragment by T(fragment) / T(focus) from the atmosphere transmittance LUT
+  uAerialTransLUT: { value: null as THREE.Texture | null },
+  /** xyz = local up at the point the light colours were evaluated at (W), w = its altitude (m); w < 0 = off */
+  uAerialLightRef: { value: new THREE.Vector4(0, 1, 0, -1) },
   // legacy stand-in uniforms (unused, kept so older code keeps compiling)
   uAerialFogColor: { value: new THREE.Color(0.55, 0.65, 0.8) },
   uAerialDensity: { value: 1 / 40000 },
@@ -93,6 +98,33 @@ float aerialEarthShadow(vec3 rel, vec3 L) {
   return clamp((1.5707963 + dip - zen) / 0.0188 + 0.5, 0.0, 1.0);
 }
 float aerialSunVisibility(vec3 rel) { return aerialEarthShadow(rel, uAerialSunDir); }
+// atmospheric transmittance toward a light (W unit direction) at the fragment relative to the point
+// the light colour was evaluated at (the focus): a terrain / ship / smoke fragment near sea level gets
+// the reddened, dimmer light of the lower atmosphere while the key is coloured for a rocket 60 km up.
+uniform sampler2D uAerialTransLUT;
+uniform vec4 uAerialLightRef;
+vec3 aerialTransToTop(float h, float mu) {
+  const float R0 = ${EARTH_RADIUS.toFixed(1)}, HT = ${ATMO.H.toFixed(1)};
+  h = clamp(h, 0.0, HT);
+  float rho = sqrt(max(h * (2.0 * R0 + h), 0.0));
+  float Hh = sqrt(HT * (2.0 * R0 + HT));
+  // light below the geometric horizon: aerialEarthShadow handles the shadow, hold the horizon value
+  mu = max(mu, -rho / (R0 + h) + 0.002);
+  float r = R0 + h;
+  float d = max(0.0, -r * mu + sqrt(max(r * r * mu * mu + (HT - h) * (2.0 * R0 + HT + h), 0.0)));
+  float dMin = HT - h, dMax = rho + Hh;
+  vec2 uv = vec2(clamp((d - dMin) / max(dMax - dMin, 1e-3), 0.0, 1.0), rho / Hh);
+  uv = vec2(0.5 / 256.0, 0.5 / 64.0) + uv * vec2(1.0 - 1.0 / 256.0, 1.0 - 1.0 / 64.0);
+  return texture(uAerialTransLUT, uv).rgb;
+}
+vec3 aerialLightTransRatio(vec3 rel, vec3 L) {
+  if (uAerialLightRef.w < 0.0) return vec3(1.0);
+  vec3 p = uAerialCamUp * (${EARTH_RADIUS.toFixed(1)} + uAerialCamAlt) + rel;
+  float r = length(p);
+  vec3 tF = aerialTransToTop(r - ${EARTH_RADIUS.toFixed(1)}, dot(p, L) / r);
+  vec3 tR = aerialTransToTop(uAerialLightRef.w, dot(uAerialLightRef.xyz, L));
+  return clamp(tF / max(tR, vec3(1e-3)), 0.0, 4.0);
+}
 #endif
 `;
 
@@ -150,7 +182,7 @@ export function patchMaterial(mat: THREE.Material): void {
       // volumetric cloud shadows on the directional (sun/moon) lights
       fs = fs.replace(
         '#include <lights_fragment_begin>',
-        'float aerialCloudSh = aerialCloudShadow(vAerialRel);\n' + chunk.replace(DIR_LIGHT_LINE, DIR_LIGHT_LINE + '\n\t\tdirectLight.color *= aerialCloudSh * aerialEarthShadow(vAerialRel, normalize((vec4(directionalLight.direction, 0.0) * viewMatrix).xyz));'),
+        'float aerialCloudSh = aerialCloudShadow(vAerialRel);\n' + chunk.replace(DIR_LIGHT_LINE, DIR_LIGHT_LINE + '\n\t\t{ vec3 aerLW = normalize((vec4(directionalLight.direction, 0.0) * viewMatrix).xyz);\n\t\tdirectLight.color *= aerialCloudSh * aerialEarthShadow(vAerialRel, aerLW) * aerialLightTransRatio(vAerialRel, aerLW); }'),
       );
     }
     shader.fragmentShader = fs
@@ -162,7 +194,7 @@ export function patchMaterial(mat: THREE.Material): void {
       );
   };
   m.customProgramCacheKey = function () {
-    return (prevKey ? prevKey.call(this) : '') + (additive ? '|aerialA3' : '|aerial3');
+    return (prevKey ? prevKey.call(this) : '') + (additive ? '|aerialA4' : '|aerial4');
   };
   m.needsUpdate = true;
 }

@@ -11,6 +11,7 @@ import * as THREE from 'three';
 import type { AppContext, ViewInfo } from '../../core/context';
 import { EARTH_RADIUS } from '../../core/constants';
 import { worldDirToEcef } from '../../core/frames';
+import { NIGHT_CITY_GLSL, nightCityUniforms } from './nightCity';
 
 const R = EARTH_RADIUS;
 
@@ -98,6 +99,9 @@ float tNoise(vec2 p) {
   vec2 u = f * f * (3.0 - 2.0 * f);
   return mix(mix(tHash(i), tHash(i + vec2(1, 0)), u.x), mix(tHash(i + vec2(0, 1)), tHash(i + vec2(1, 1)), u.x), u.y);
 }
+uniform vec4 uTerRegBox;   // lon0, lat0, lon1, lat1 of the regional (uv1) textures
+uniform float uTerPixAng;  // rad per pixel
+${NIGHT_CITY_GLSL}
 `;
 
 export class Terrain {
@@ -111,6 +115,8 @@ export class Terrain {
   private detailOff1 = { value: new THREE.Vector2() };
   private detailOff2 = { value: new THREE.Vector2() };
   private dayRegU = { value: null as THREE.Texture | null };
+  private regBoxU = { value: new THREE.Vector4(-130, 18, -106, 42) };
+  private pixAngU = { value: 0.0006 };
   private level = 2;
   private built = -1;
   private albedo: Partial<Record<'t1' | 't2', THREE.Texture>> = {};
@@ -123,6 +129,8 @@ export class Terrain {
   async load(): Promise<void> {
     const meta = (await (await fetch('/data/env/meta.json')).json()) as Meta;
     this.meta = meta;
+    const rg = meta.region;
+    if (rg) this.regBoxU.value.set(rg.lon0, rg.lat0, rg.lon1, rg.lat1);
     const loader = new THREE.TextureLoader();
     const aniso = this.ctx.renderer.capabilities.getMaxAnisotropy();
     await Promise.all(
@@ -216,6 +224,10 @@ export class Terrain {
       sh.uniforms.uDayReg = dayReg;
       sh.uniforms.uDetail = detail;
       sh.uniforms.uDetailOff = name === 't1' ? this.detailOff1 : this.detailOff2;
+      sh.uniforms.uTerRegBox = this.regBoxU;
+      sh.uniforms.uTerPixAng = this.pixAngU;
+      sh.uniforms.uNightCity = nightCityUniforms.uNightCity;
+      sh.uniforms.uCityBox = nightCityUniforms.uCityBox;
       sh.vertexShader = sh.vertexShader
         .replace('#include <common>', `#include <common>\n${TERRAIN_VERT_PARS}`)
         .replace('#include <uv_vertex>', '#include <uv_vertex>\nvFade = aFade;\nvDetailUv = uv * ' + (name === 't1' ? '2048.0' : '4096.0') + ';');
@@ -239,7 +251,16 @@ export class Terrain {
         // Up close they would make the whole ground glow (lights are point sources there).
         .replace(
           '#include <emissivemap_fragment>',
-          '#include <emissivemap_fragment>\ntotalEmissiveRadiance *= smoothstep(4000.0, 20000.0, length(vViewPosition));',
+          `#ifdef USE_EMISSIVEMAP
+            {
+              // regional Black Marble (uv1), replaced by the 460 m California crop + street breakup
+              vec3 emC = texture2D(emissiveMap, vEmissiveMapUv).rgb;
+              vec2 ll = mix(uTerRegBox.xy, uTerRegBox.zw, vEmissiveMapUv);
+              float fpE = length(vViewPosition) * uTerPixAng / max(abs(dot(normalize(vViewPosition), normal)), 0.15);
+              totalEmissiveRadiance *= nightCity(emC, ll.x, ll.y, fpE);
+            }
+          #endif
+          totalEmissiveRadiance *= smoothstep(4000.0, 20000.0, length(vViewPosition));`,
         );
     };
     m.customProgramCacheKey = () => 'envTerrain';
@@ -394,8 +415,9 @@ export class Terrain {
   }
 
   /** per view: night lights on the terrain, detail strength */
-  beforeViewRender(view: ViewInfo, camAlt: number, _pixAng: number, nightLights = 0, nightF = 0): void {
+  beforeViewRender(view: ViewInfo, camAlt: number, pixAng: number, nightLights = 0, nightF = 0): void {
     this.detailU.value = camAlt < 20_000 ? 1 : 0;
+    this.pixAngU.value = pixAng;
     // detail-noise coordinate offset near the camera (keeps the noise argument small)
     const p = view.camWorldPos;
     const s = Math.hypot(p.x, p.z), th = s / R;

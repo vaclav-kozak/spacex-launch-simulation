@@ -2,7 +2,7 @@
 """Env asset pipeline: downloads public-domain / CC data and bakes the runtime textures.
 
 Usage:  python3 src/render/env/tools/prep_assets.py [--raw DIR] [step ...]
-Steps:  stars milkyway moon earth night clouds mask terrain coast  (default: all)
+Steps:  stars milkyway moon earth night(+city crop) clouds mask terrain coast  (default: all)
 Raw downloads are cached in --raw (default: .cache/env-raw, not shipped).
 Outputs: public/textures/env/*, public/data/env/*  (sources + licenses in docs/assets/env.md)
 """
@@ -22,6 +22,9 @@ PAD_ELEV = 60.0
 
 # regional (lat/lon rectangle) textures
 REG = dict(lat0=18.0, lat1=42.0, lon0=-130.0, lon1=-106.0)
+# city-lights crop at the native ~460 m/px of the Black Marble 500 m tiles (SF Bay .. San Diego, Las Vegas
+# on the edge); must match NIGHT_CITY_BOX in src/render/env/earth.ts
+CITY = dict(lat0=32.0, lat1=38.4, lon0=-123.5, lon1=-115.0)
 # local azimuthal-equidistant terrain grids (x east, z south, meters, centered on cx, cz)
 T1 = dict(name='t1', cx=8000.0, cz=2000.0, size=40000.0, hN=2048, iN=4096, demZ=13, imgZ=14)
 T2 = dict(name='t2', cx=100000.0, cz=50000.0, size=400000.0, hN=2048, iN=4096, demZ=10, imgZ=11)
@@ -219,6 +222,16 @@ def step_night(raw):
     ppd = a1.width / 90.0
     box = (int((REG['lon0'] + 180) * ppd), int((90 - REG['lat1']) * ppd), int((REG['lon1'] + 180) * ppd), int((90 - REG['lat0']) * ppd))
     a1.crop(box).resize((2048, 2048), Image.LANCZOS).save(os.path.join(TEX, 'earth_night_reg.jpg'), quality=85)
+    # California coast at full tile resolution: 8.5 x 6.4 deg = 2040 x 1536 px -> 2048 x 1536.
+    # The 500 m tile is the ~15" VIIRS grid upsampled 2x by pixel replication (2-px blocks, which a
+    # bilinear lookup turns into visible squares); a sigma 0.9 px blur removes the blocks and keeps
+    # the real (~0.7-0.9 km) detail.
+    from PIL import ImageFilter
+    box = (round((CITY['lon0'] + 180) * ppd), round((90 - CITY['lat1']) * ppd), round((CITY['lon1'] + 180) * ppd), round((90 - CITY['lat0']) * ppd))
+    city = a1.crop((box[0] - 4, box[1] - 4, box[2] + 4, box[3] + 4)).filter(ImageFilter.GaussianBlur(0.9))
+    city = city.crop((4, 4, city.width - 4, city.height - 4))
+    city.resize((2048, 1536), Image.LANCZOS).save(os.path.join(TEX, 'earth_night_city.jpg'), quality=90)
+    meta_update({'city': CITY})
 
 
 def step_clouds(raw):

@@ -10,6 +10,7 @@ import { EARTH_RADIUS, PAD_LAT_DEG, PAD_LON_DEG } from '../../core/constants';
 import { worldDirToEcef } from '../../core/frames';
 import { CASCADE_L } from './oceanFFT';
 import { CLOUD_WEATHER_GLSL, cloudWeatherUniforms } from './cloudWeather';
+import { NIGHT_CITY_GLSL, nightCityUniforms } from './nightCity';
 import { AERIAL_GLSL, aerialUniforms } from './aerial';
 
 export const NWAVES = 12;
@@ -118,6 +119,7 @@ ${AERIAL_GLSL}
 ${IRR_LOOKUP_GLSL}
 ${OCEAN_BRDF_GLSL}
 ${CLOUD_WEATHER_GLSL}
+${NIGHT_CITY_GLSL}
 uniform sampler2D uSeaSkyLUT;
 uniform vec3 uLightDir;
 uniform vec3 uLightE;
@@ -333,25 +335,39 @@ void main() {
     vec3 lc = alb * (Esun * max(mus, 0.0) + Esky) / 3.14159;
     vec3 nl = textureGrad(uNight, guv, gdx, gdy).rgb;
     if (regW > 0.0) nl = mix(nl, texture(uNightReg, ruv).rgb, regW);
-    float nightF = smoothstep(0.02, -0.12, mus);
+    nl = nightCity(nl, lon, lat, dist * uPixAng / max(sqrt(abs(dot(dir, up))), 0.15));
+    // real sun elevation (uLightDir is the moon on moonlit nights)
+    float nightF = smoothstep(0.02, -0.12, dot(uAerialSunDir, up));
     lc += nl * uNightLights * nightF;
     col = mix(col, lc, land);
   }
   // ---- 2D cloud layer (from altitude, outside the volumetric cloud domain)
   if (uCloudOn > 0.0) {
     float domain = mix(1.0, smoothstep(uCloudFade.y, uCloudFade.z, dist), uCloudFade.x);
-    float cov = 0.0;
+    float cov = 0.0, thick = 0.5, tex = 0.5;
     if (domain > 0.0) {
       float cd = textureGrad(uClouds, guv, gdx, gdy).r;
       cov = smoothstep(0.15, 0.85, cd);
-      // near the pad: the same regime/weather model as the volumetric clouds
+      thick = cd;
+      // near the pad: the same regime/weather model as the volumetric clouds (footprint-filtered)
       float rw = 1.0 - smoothstep(700e3, 1000e3, length(tp));
-      if (rw > 0.0) cov = mix(cov, cldCover2D(tp, texture(uCldWeather, (tp + uCldWind) / CLD_TILE)), rw);
+      if (rw > 0.0) {
+        // footprint between the geometric mean and the long (depth) axis: no sub-pixel cumulus dashes at grazing angles
+        float fp = dist * uPixAng / pow(max(abs(dot(dir, up)), 0.03), 0.75);
+        CldReg cR = cldRegime(tp);
+        CldW cW = cldWeather(tp, cR, fp);
+        vec2 c2 = cldCover2D(cR, cW);
+        cov = mix(cov, 1.0 - (1.0 - c2.x) * (1.0 - c2.y), rw);
+        thick = mix(thick, cW.w.a, rw);
+        tex = mix(tex, mix(cW.w.g, 0.5, cW.k), rw);
+      }
     }
     cov *= uCloudOn * domain;
     if (cov > 0.0) {
-      vec3 cl = vec3(0.9) * (Esun * (max(mus, 0.0) * 0.8 + 0.2 * max(mus + 0.1, 0.0)) + Esky * 1.3) / 3.14159;
-      // cloud-top sunlit even slightly past the terminator (clouds sit ~2-8 km up)
+      // albedo from thickness + cell texture (brighter cores, greyer rifts / thin edges)
+      float alb = (0.6 + 0.3 * thick) * (0.8 + 0.4 * tex);
+      // cloud-top sunlit even slightly past the terminator (clouds sit ~1-3 km up)
+      vec3 cl = alb * (Esun * (max(mus, 0.0) * 0.8 + 0.2 * max(mus + 0.1, 0.0)) + Esky * 1.3) / 3.14159;
       col = mix(col, cl, cov);
     }
   }
@@ -436,6 +452,7 @@ export class EarthSurface {
         ...(aerialUniforms as unknown as Record<string, THREE.IUniform>),
         ...shared,
         ...(cloudWeatherUniforms as unknown as Record<string, THREE.IUniform>),
+        ...(nightCityUniforms as unknown as Record<string, THREE.IUniform>),
         uGridBox: { value: new THREE.Vector4(-1, -1, 1, 1) },
         uWaveA: { value: Array.from({ length: NWAVES }, () => new THREE.Vector4()) },
         uWaveB: { value: Array.from({ length: NWAVES }, () => new THREE.Vector4()) },

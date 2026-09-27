@@ -18,6 +18,7 @@ import { EarthSurface, MAX_PLUME_LIGHTS, type EarthTextures } from './earth';
 import { EnvProbe } from './envprobe';
 import { Terrain } from './terrain';
 import { Clouds } from './clouds';
+import { setNightCity } from './nightCity';
 import { envLook } from './look';
 
 const D2R = Math.PI / 180;
@@ -28,6 +29,11 @@ const NIGHT_GAIN = 800;
 const MOON_SUN_RATIO = 2.5e-6;
 const MOON_ANG_R = 0.00452;
 const MOON_ALBEDO_MEAN = 0.30; // mean linear value of the near side in moon.jpg
+/** colour of moonlight as a light source. Physically moonlight is slightly redder than sunlight,
+ * but a moonlit landscape reads blue to the dark-adapted eye (and in every night film), so the
+ * light is graded cool here; luminance ~= the physical (1.0, 0.95, 0.88). The moon disc itself
+ * (uMoonE) keeps its neutral colour. */
+const MOON_TINT: [number, number, number] = [0.8, 0.97, 1.22];
 const MW_RADIANCE = 6e-8; // brightest Milky Way (~20 mag/arcsec^2) in scene radiance units
 const AIRGLOW = 9e-9; // ~22 mag/arcsec^2
 const STAR_BOOST = 3;
@@ -96,6 +102,7 @@ export class Environment implements FrameModule {
     // share the aerial uniform objects with everyone else (vfx/vehicles use aerialUniforms)
     aerialUniforms.uAerialIn.value = atm.aerialRT.textures[0];
     aerialUniforms.uAerialTr.value = atm.aerialRT.textures[1];
+    aerialUniforms.uAerialTransLUT.value = (atm.uniforms as unknown as Record<string, THREE.IUniform>).uTransLUT.value as THREE.Texture;
     const au = atm.uniforms as unknown as Record<string, THREE.IUniform>;
     const ae = aerialUniforms as unknown as Record<string, THREE.IUniform>;
     for (const k of ['uAerialIn', 'uAerialTr', 'uAerialCamUp', 'uAerialSunTan', 'uAerialCamAlt', 'uAerialOn']) au[k] = ae[k];
@@ -157,7 +164,7 @@ export class Environment implements FrameModule {
     };
     const T = '/textures/env/';
     const hi = this.ctx.quality.level >= 2;
-    const [dayG, dayR, nightG, nightR, maskG, maskR, clouds, moon, mw, stars] = await Promise.all([
+    const [dayG, dayR, nightG, nightR, maskG, maskR, clouds, moon, mw, stars, , , nightC] = await Promise.all([
       load(T + (hi ? 'earth_day.jpg' : 'earth_day.jpg'), true, true),
       load(T + 'earth_day_reg.jpg', true),
       load(T + 'earth_night.jpg', true, true),
@@ -173,7 +180,9 @@ export class Environment implements FrameModule {
       }),
       this.terrain.load().catch((e) => console.warn('[env] terrain failed', e)),
       this.clouds.load().catch((e) => console.warn('[env] clouds failed', e)),
+      load(T + 'earth_night_city.jpg', true),
     ]);
+    setNightCity(nightC);
     const eu = this.earth.material.uniforms;
     if (dayG) eu.uDayGlobal.value = dayG;
     if (dayR) eu.uDayReg.value = dayR;
@@ -269,8 +278,7 @@ export class Environment implements FrameModule {
       return false;
     }
     outDir.copy(e.moonDir);
-    // moonlight is slightly redder than sunlight
-    outE.setRGB(1.0, 0.95, 0.88).multiplyScalar(this.moonE);
+    outE.setRGB(...MOON_TINT).multiplyScalar(this.moonE);
     return true;
   }
 
@@ -374,6 +382,8 @@ export class Environment implements FrameModule {
     const focusPos = this.focusPosition(view, snap, this._focus);
     const fAlt = Math.max(0, altitudeOf(focusPos));
     const fUp = upAt(focusPos, this._v2);
+    // directional light colours below are evaluated here; patched materials rescale per fragment
+    aerialUniforms.uAerialLightRef.value.set(fUp.x, fUp.y, fUp.z, fAlt);
     const L = ctx.lighting;
     L.sunDir.copy(e.sunDir);
     const sunMu = e.sunDir.dot(fUp);
@@ -383,7 +393,7 @@ export class Environment implements FrameModule {
     L.moonDir.copy(e.moonDir);
     const moonMu = e.moonDir.dot(fUp);
     transmittanceCPU(fAlt, moonMu, this._c2);
-    L.moonColor.setRGB(1.0, 0.95, 0.88).multiply(this._c2).multiplyScalar(this.moonE);
+    L.moonColor.setRGB(...MOON_TINT).multiply(this._c2).multiplyScalar(this.moonE);
     // ambient irradiance (sky dome on a horizontal surface; ground bounce from below)
     const lightMuF = lightDir.dot(fUp);
     this.atm.skyIrradianceCPU(fAlt, lightMuF, L.skyColor);

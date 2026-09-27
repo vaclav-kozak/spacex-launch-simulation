@@ -26,7 +26,7 @@ import { LAYER_VFX, type AppContext, type ViewInfo } from '../../core/context';
 import type { SimSnapshot } from '../../core/types';
 import { aerialUniforms } from './aerial';
 import { AERIAL_LOOKUP_GLSL, ATMO_COMMON, IRR_LOOKUP_GLSL } from './atmosphere';
-import { CLOUD_SHELL, CLOUD_TILE, CLOUD_WEATHER_GLSL, cloudWeatherUniforms } from './cloudWeather';
+import { CLOUD_SHELL, CLOUD_WEATHER_GLSL, CLOUD_WEATHER_N, CLOUD_WIND_WRAP, cloudWeatherUniforms } from './cloudWeather';
 import { FullscreenPass, makeRT, passMaterial } from './gpu';
 
 export { CLOUD_SHELL };
@@ -69,15 +69,15 @@ vec3 cldQ(vec2 xz, float h, vec4 w) {
 }
 
 // cloud density 0..1 before detail erosion; hf = height fraction in the layer that won
-float cldBase(vec3 q, float h, vec2 reg, vec4 w, out float hf) {
+float cldBase(vec3 q, float h, CldReg reg, vec4 w, out float hf) {
   hf = 0.0;
   // stratocumulus deck: flat base, lumpy top
   float scB = 620.0 + 180.0 * w.b;
   float scT = scB + 280.0 + 460.0 * w.a;
   float hs = (h - scB) / (scT - scB);
-  float covS = clamp(reg.x * (0.55 + 0.9 * w.r), 0.0, 1.0);
+  float covS = clamp(reg.sc * (0.55 + 0.9 * w.r), 0.0, 1.0);
   // cumulus: cells, towers taller where the cell is strong
-  float covC = clamp(reg.y * (0.6 + 0.8 * w.r), 0.0, 1.0);
+  float covC = clamp(reg.cu * (0.3 + 1.4 * w.r * w.r), 0.0, 1.0);
   float cell = smoothstep(1.0 - covC, 1.0 - covC + 0.3, w.g);
   float cuB = 800.0 + 160.0 * w.b;
   float cuT = cuB + cell * (450.0 + 2000.0 * w.a * w.a);
@@ -115,12 +115,12 @@ float holeMask(vec2 xz) {
   }
   return m;
 }
-// coarse density at W horizontal xz (absolute) and altitude h
-float cldCoarse(vec2 xz, float h) {
+// coarse density at W horizontal xz (absolute) and altitude h; fp = footprint (m)
+float cldCoarse(vec2 xz, float h, float fp) {
   if (h < CL_BOT || h > CL_TOP) return 0.0;
-  vec2 reg = cldRegime(xz);
-  if (reg.x + reg.y < 0.01) return 0.0;
-  vec4 w = cldWeather(xz);
+  CldReg reg = cldRegime(xz);
+  if (reg.sc + reg.cu < 0.01) return 0.0;
+  vec4 w = cldWeather(xz, reg, fp).w;
   float hf;
   return cldBase(cldQ(xz, h, w), h, reg, w, hf) * holeMask(xz);
 }
@@ -153,6 +153,7 @@ uniform vec3 uPlCol[${MAX_PL}];
 uniform float uPlRange[${MAX_PL}];
 uniform int uPlCount;
 uniform float uFrame;
+uniform float uPixAng;
 in vec2 vUv;
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out vec4 outAux;
@@ -234,9 +235,9 @@ void main() {
     float h = atmAltAt(h0, mu, t);
     if (h < CL_BOT || h > CL_TOP) continue;
     vec2 xz = uOrigin.xz + rel.xz;
-    vec2 reg = cldRegime(xz);
-    if (reg.x + reg.y < 0.01) continue;
-    vec4 w = cldWeather(xz);
+    CldReg reg = cldRegime(xz);
+    if (reg.sc + reg.cu < 0.01) continue;
+    vec4 w = cldWeather(xz, reg, t * uPixAng).w;
     vec3 q = cldQ(xz, h, w);
     float hf;
     float d = cldBase(q, h, reg, w, hf);
@@ -310,6 +311,7 @@ uniform vec3 uOrigin;
 uniform vec4 uBox;   // xy = box min (x,z) rel camera, z = size
 uniform vec3 uKeyDir;
 uniform float uShSteps;
+uniform float uShFp;
 in vec2 vUv;
 layout(location = 0) out vec4 outColor;
 void main() {
@@ -332,7 +334,7 @@ void main() {
     float t = t0 + (float(i) + 0.5) * dt;
     float h = atmAltAt(0.0, mu, t);
     vec2 xz = uOrigin.xz + G.xz + uKeyDir.xz * t;
-    float d = cldCoarse(xz, h);
+    float d = cldCoarse(xz, h, uShFp);
     if (d > 0.0) {
       tau += d * uSigma * dt;
       hB = min(hB, h);
@@ -376,7 +378,7 @@ void main() {
     float t = t0 + (float(i) + 0.5) * dt;
     float h = atmAltAt(h0, mu, t);
     vec2 xz = uOrigin.xz + P.xz + uKeyDir.xz * t;
-    tau += cldCoarse(xz, h) * uSigma * dt;
+    tau += cldCoarse(xz, h, 0.0) * uSigma * dt;
   }
   outColor = vec4(vec3(exp(-tau)), 1.0);
 }
@@ -572,6 +574,13 @@ interface ViewShadow {
   camT: number;
   targetFocusT: number;
   targetCamT: number;
+  /** last shadow-map render: frame, absolute box corner (render-origin frame), half size, key dir, wind */
+  shFrame: number;
+  shX0: number;
+  shZ0: number;
+  shHalf: number;
+  shDir: THREE.Vector3;
+  shWind: THREE.Vector2;
 }
 interface Hole { x: number; z: number; t0: number }
 
@@ -663,6 +672,7 @@ export class Clouds {
       uPlRange: { value: new Array(MAX_PL).fill(1) },
       uPlCount: { value: 0 },
       uFrame: { value: 0 },
+      uPixAng: { value: 0.001 },
     });
     this.march = new FullscreenPass(this.marchMat);
     this.resolveMat = passMaterial(RESOLVE_FRAG, {
@@ -683,7 +693,7 @@ export class Clouds {
     this.resolve = new FullscreenPass(this.resolveMat);
     const keyDir = { value: new THREE.Vector3(0, 1, 0) };
     const camU = { uCamAlt: shared.uCamAlt, uCamUp: shared.uCamUp, uTransLUT: shared.uTransLUT, uMsLUT: shared.uMsLUT };
-    this.shadowMat = passMaterial(SHADOW_FRAG, { ...camU, ...wu, ...density, uOrigin: origin, uBox: { value: new THREE.Vector4() }, uKeyDir: keyDir, uShSteps: { value: 16 } });
+    this.shadowMat = passMaterial(SHADOW_FRAG, { ...camU, ...wu, ...density, uOrigin: origin, uBox: { value: new THREE.Vector4() }, uKeyDir: keyDir, uShSteps: { value: 16 }, uShFp: { value: 100 } });
     this.shadowPass = new FullscreenPass(this.shadowMat);
     this.probeMat = passMaterial(PROBE_FRAG, {
       ...camU, ...wu, ...density, uOrigin: origin, uKeyDir: keyDir,
@@ -749,10 +759,11 @@ export class Clouds {
   async load(): Promise<void> {
     const get = async (name: string) => new Uint8Array(await (await fetch(`/data/env/${name}`)).arrayBuffer());
     const [shape, detail, weather] = await Promise.all([get('cloud_shape.bin'), get('cloud_detail.bin'), get('cloud_weather.bin')]);
-    if (shape.length !== 128 ** 3 || detail.length !== 32 ** 3 || weather.length !== 512 * 512 * 4) throw new Error('cloud noise size');
+    const WN = CLOUD_WEATHER_N;
+    if (shape.length !== 128 ** 3 || detail.length !== 32 ** 3 || weather.length !== WN * WN * 4) throw new Error('cloud noise size');
     this.marchMat.uniforms.uShape.value = tex3D(shape, 128);
     this.marchMat.uniforms.uDetail.value = tex3D(detail, 32);
-    const w = new THREE.DataTexture(weather, 512, 512, THREE.RGBAFormat, THREE.UnsignedByteType);
+    const w = new THREE.DataTexture(weather, WN, WN, THREE.RGBAFormat, THREE.UnsignedByteType);
     w.wrapS = w.wrapT = THREE.RepeatWrapping;
     w.minFilter = THREE.LinearMipmapLinearFilter;
     w.magFilter = THREE.LinearFilter;
@@ -763,9 +774,10 @@ export class Clouds {
     this.ready = true;
   }
 
-  /** regional land mask (drives the coastal regime); the global cloud texture is used by the globe */
-  setGlobalCoverage(_clouds: THREE.Texture, maskReg?: THREE.Texture): void {
+  /** regional land mask (drives the coastal regime) + Blue Marble clouds (synoptic coverage away from the pad) */
+  setGlobalCoverage(clouds: THREE.Texture, maskReg?: THREE.Texture): void {
     if (maskReg) cloudWeatherUniforms.uCldMask.value = maskReg;
+    cloudWeatherUniforms.uCldBM.value = clouds;
   }
 
   setWind(speed: number, fromDeg: number): void {
@@ -782,7 +794,8 @@ export class Clouds {
     this.prevT = t;
     const wv = this.windVel;
     const wx = -wv.x * t, wz = -wv.y * t;
-    cloudWeatherUniforms.uCldWind.value.set(wx - Math.floor(wx / CLOUD_TILE) * CLOUD_TILE, wz - Math.floor(wz / CLOUD_TILE) * CLOUD_TILE);
+    const W = CLOUD_WIND_WRAP;
+    cloudWeatherUniforms.uCldWind.value.set(wx - Math.floor(wx / W) * W, wz - Math.floor(wz / W) * W);
     const wrap = (v: number) => v - Math.floor(v / EVO_WRAP) * EVO_WRAP;
     this.marchMat.uniforms.uEvo.value.set(wrap(-wv.x * t * 1.1), wrap(-0.6 * t), wrap(-wv.y * t * 1.1));
 
@@ -857,7 +870,10 @@ export class Clouds {
     if (!vs) {
       const probe = new THREE.WebGLRenderTarget(2, 1, { type: THREE.UnsignedByteType, depthBuffer: false });
       probe.texture.generateMipmaps = false;
-      vs = { rt: null, size: 0, probe, buf: new Uint8Array(8), pending: false, focusT: 1, camT: 1, targetFocusT: 1, targetCamT: 1 };
+      vs = {
+        rt: null, size: 0, probe, buf: new Uint8Array(8), pending: false, focusT: 1, camT: 1, targetFocusT: 1, targetCamT: 1,
+        shFrame: -100, shX0: 0, shZ0: 0, shHalf: 0, shDir: new THREE.Vector3(), shWind: new THREE.Vector2(),
+      };
       this.shadows.set(this.viewId, vs);
     }
     if (!this.active || this.shadowOff) {
@@ -869,23 +885,48 @@ export class Clouds {
     }
     const origin = this.ctx.renderOrigin;
     const n = [256, 384, 512, 1024][this.q] ?? 512;
+    let fresh = false;
     if (!vs.rt || vs.size !== n) {
       vs.rt?.dispose();
       vs.rt = makeRT(n, n);
       vs.size = n;
+      fresh = true;
     }
     const half = THREE.MathUtils.clamp(12_000 + 2.5 * camAlt, 12_000, 150_000);
-    const texel = (2 * half) / n;
-    const x0 = Math.floor((origin.x - half) / texel) * texel;
-    const z0 = Math.floor((origin.z - half) / texel) * texel;
-    const su = this.shadowMat.uniforms;
-    su.uBox.value.set(x0 - origin.x, z0 - origin.z, 2 * half, 0);
-    su.uKeyDir.value.copy(keyDir);
-    su.uShSteps.value = [12, 16, 24, 24][this.q] ?? 16;
-    this.shadowPass.render(renderer, vs.rt);
+    // The map changes slowly (wind drift, sun motion), so at low quality it is re-rendered only every
+    // few frames, or sooner when the camera leaves the middle of the box, the box grows / shrinks, the
+    // key light turns or the wind offset jumps (seek). In between the stored map is reused in place.
+    const every = [4, 2, 1, 1][this.q] ?? 1;
+    const wind = cloudWeatherUniforms.uCldWind.value;
+    const cx = vs.shX0 + vs.shHalf, cz = vs.shZ0 + vs.shHalf;
+    const stale =
+      fresh ||
+      this.renderFrame - vs.shFrame >= every ||
+      this.renderFrame < vs.shFrame ||
+      Math.abs(half / Math.max(vs.shHalf, 1) - 1) > 0.04 ||
+      Math.max(Math.abs(origin.x - cx), Math.abs(origin.z - cz)) > 0.08 * half ||
+      keyDir.dot(vs.shDir) < 0.99998 ||
+      Math.abs(wind.x - vs.shWind.x) + Math.abs(wind.y - vs.shWind.y) > (0.5 * half) / n;
+    if (stale) {
+      const texel = (2 * half) / n;
+      const x0 = Math.floor((origin.x - half) / texel) * texel;
+      const z0 = Math.floor((origin.z - half) / texel) * texel;
+      const su = this.shadowMat.uniforms;
+      su.uBox.value.set(x0 - origin.x, z0 - origin.z, 2 * half, 0);
+      su.uKeyDir.value.copy(keyDir);
+      su.uShSteps.value = [12, 16, 24, 24][this.q] ?? 16;
+      su.uShFp.value = texel;
+      this.shadowPass.render(renderer, vs.rt);
+      vs.shFrame = this.renderFrame;
+      vs.shX0 = x0;
+      vs.shZ0 = z0;
+      vs.shHalf = half;
+      vs.shDir.copy(keyDir);
+      vs.shWind.copy(wind);
+    }
     au.uCloudShadow.value = vs.rt.texture;
-    au.uCloudShadowBox.value.set(x0 - origin.x, z0 - origin.z, 1 / (2 * half), 1);
-    au.uCloudShadowDir.value.copy(keyDir);
+    au.uCloudShadowBox.value.set(vs.shX0 - origin.x, vs.shZ0 - origin.z, 1 / (2 * vs.shHalf), 1);
+    au.uCloudShadowDir.value.copy(vs.shDir);
 
     // probe (every 3rd frame, async readback)
     if (!vs.pending && this.renderFrame % 3 === 0) {
@@ -956,6 +997,8 @@ export class Clouds {
     mu.uDepthTex.value = depth;
     mu.uViewPx.value.set(w, h);
     mu.uScale.value = s;
+    // footprint of one march texel per metre of distance (weather-map mip selection)
+    mu.uPixAng.value = ((camera.fov * Math.PI) / 180 / h) * s;
     mu.uInvProj.value.copy(camera.projectionMatrixInverse);
     mu.uCamRot.value.setFromMatrix4(camera.matrixWorld);
     mu.uFrame.value = this.frameNo++ % 1024;
