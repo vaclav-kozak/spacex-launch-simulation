@@ -50,7 +50,17 @@ sunlit white ~2^1, plume-lit smoke at the pad 2^2..2^4.5, plume core 2^6+. Post 
 * **Key compensation:** metered level maps to `key` 0.18 in bright scenes and falls to `keyDark` 0.032
   for Ln <= -12 (twilight/night stay dark instead of being lifted to grey). At night (`envLook.night`) the
   key drops up to `nightKeyStops` more (Ln -8..-14), so empty moon-lit skies read dark.
-* **EV clamps** per camera type (`minEV/maxEV` offsets on `minLum/maxLum`; onboard cams give up 3.5 EV earlier).
+* **EV clamps** per camera type (`minEV/maxEV` offsets on `minLum/maxLum`).
+* **Onboard cams are near-fixed exposure** (`Meter.anchor`), like a webcast camera set up for the
+  sunlit Earth. The window sits around `DAY_CARD_LOG` (18 % card under the unshadowed sun = log2 -1.82) + -1.8
+  and replaces the EV clamp:
+  * `onboard_engine`: may open up 0.5 stop and stop down 1.5. The MVac glow (0.35) stays orange rather than
+    turning peach. After SECO the unlit bell goes dark (Earthshine) or sunlit grey; at night it goes black.
+  * `onboard_down`: opens up to 8 stops (twilight ocean faint navy, moon-lit clouds dim) and stops down 2.
+* **Daylight stop-down cap for pad / deck cams** (`Meter.dayCap` = 2): the metered level may sit at most
+  2 stops above the incident-light prior (sun + sky gray card at the focus). It fades in with the focus
+  `sunVisibility` 0.2..0.8. Plume-lit smoke filling the frame then clips a little instead of dragging a
+  morning sky to navy. At twilight and night the cap is off.
 * **Adaptation:** exponential (`speedUp` 3.5/s brighter, `speedDown` 1/s darker) with slew limits
   (24 EV/s stopping down at ignition, 4 EV/s opening up). A camera cut adapts 4x faster for 0.7 s.
 * **Local highlight compression** (`highlightCompress`, `compressStart` 4 stops over key, range 3.5 stops in

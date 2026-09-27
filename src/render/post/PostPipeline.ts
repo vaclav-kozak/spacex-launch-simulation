@@ -14,6 +14,7 @@ import { LAYER_DEFAULT, LAYER_VFX, type AppContext, type ViewInfo } from '../../
 import { PostShared, BLOOM_LEVELS } from './PostShared';
 import { MAX_HAZE } from './shaders/composite';
 import { envLook } from '../env/look';
+import { ATMO } from '../env/atmosphere';
 import { postSettings, type PostSettings, type ToneMapper, type DofSettings } from './PostSettings';
 
 interface QualityParams {
@@ -83,17 +84,27 @@ interface Meter {
   subjW: number; // weight of geometry near the subject depth
   center: number; // centre-weight sharpness (exp(-k r^2))
   subjHead: number; // extra stops (on top of settings.meter.subjectHeadroom) the subject may run hot
+  /** fixed-ish exposure camera: [offset from the daylight gray card, stops it may open up, stops it may
+   *  stop down]. Replaces the EV clamp. A webcast engine cam is set up for the sunlit Earth; it does
+   *  not lift an unlit bell or empty space to grey. */
+  anchor?: [number, number, number];
+  /** fixed remote camera in daylight: stop down at most this many stops below the exposure the
+   *  incident light (sun + sky gray card at the focus) calls for, so plume-lit smoke filling the frame
+   *  clips instead of dragging a blue sky to navy. Fades out as the sun leaves the focus. */
+  dayCap?: number;
 }
 const METER_DEFAULT: Meter = { minEV: 0, maxEV: 0, skyW: 0.75, subjW: 2.5, center: 9, subjHead: 0 };
 const METERS: Partial<Record<string, Meter>> = {
   // long lens: small (often plume-dominated) subject on a big sky, let it run hotter so the sky keeps colour
   long_lens: { minEV: 0, maxEV: 0, skyW: 0.85, subjW: 3, center: 12, subjHead: 1.5 },
   // pad cams: a flood-lit vehicle on a dark pad is allowed to run brighter (the sky stays visible)
-  pad: { minEV: 0, maxEV: 0, skyW: 0.7, subjW: 2, center: 7, subjHead: 1 },
-  deck: { minEV: 2, maxEV: 0, skyW: 0.8, subjW: 1.5, center: 6, subjHead: 0.5 },
-  onboard_down: { minEV: 3.5, maxEV: 0, skyW: 1, subjW: 1, center: 4, subjHead: 0 },
-  onboard_engine: { minEV: 3.5, maxEV: 0, skyW: 1, subjW: 1, center: 4, subjHead: 0 },
+  pad: { minEV: 0, maxEV: 0, skyW: 0.7, subjW: 2, center: 7, subjHead: 1, dayCap: 2 },
+  deck: { minEV: 2, maxEV: 0, skyW: 0.8, subjW: 1.5, center: 6, subjHead: 0.5, dayCap: 2 },
+  onboard_down: { minEV: 3.5, maxEV: 0, skyW: 1, subjW: 1, center: 4, subjHead: 0, anchor: [-1.8, 8, 2] },
+  onboard_engine: { minEV: 3.5, maxEV: 0, skyW: 1, subjW: 1, center: 4, subjHead: 0, anchor: [-1.8, 0.5, 1.5] },
 };
+/** log2 luminance of an 18% card under the unshadowed sun, 45° (the daylight exposure reference) */
+const DAY_CARD_LOG = Math.log2((0.18 / Math.PI) * ATMO.sunE * 0.75);
 function meterFor(view: ViewInfo): Meter {
   return METERS[view.mode] ?? (view.onboard ? METERS.onboard_down! : METER_DEFAULT);
 }
@@ -343,19 +354,29 @@ export class PostPipeline {
       au.tPrev.value = this.exp[this.expRead].texture;
       (au.uP.value as THREE.Vector4).set(mt.lowPercent, mt.highPercent, mt.highlightPercent, mt.highlightHeadroom);
       const bias = (ctx.lighting.exposureBias || 0) + set.exposureBias;
-      (au.uClamp.value as THREE.Vector4).set(Math.log2(mt.minLum) + meter.minEV, Math.log2(mt.maxLum) + meter.maxEV, 0, bias);
-      (au.uKey.value as THREE.Vector4).copy(keyU);
-      (au.uKeyDeep.value as THREE.Vector3).set(mt.nightKeyStops * envLook.night, mt.darkLog + 4, mt.darkLog - 2);
-      const fast = this.fastAdapt > 0 ? 4 : 1;
-      (au.uAdapt.value as THREE.Vector4).set(dt, mt.speedUp * fast, mt.speedDown * fast, this.needReset ? 1 : 0);
-      (au.uMaxRate.value as THREE.Vector2).set(mt.maxRateUp * fast, mt.maxRateDown * fast);
-      (au.uSubj.value as THREE.Vector4).set(mt.subjectHeadroom + meter.subjHead, 0.015, 0.06, view.onboard || meter.subjW <= 1 ? 0 : 1);
       // incident-light prior: sun-lit gray card (only used when the frame is mostly black, e.g. space)
       const L = ctx.lighting;
       const sunLum = (0.2126 * L.sunColor.r + 0.7152 * L.sunColor.g + 0.0722 * L.sunColor.b) * L.sunVisibility;
       const skyLum = 0.2126 * L.skyColor.r + 0.7152 * L.skyColor.g + 0.0722 * L.skyColor.b;
       const gray = (0.18 / Math.PI) * (sunLum * 0.75 + skyLum);
       const priorL = Math.log2(Math.max(1e-9, gray));
+      let minL = Math.log2(mt.minLum) + meter.minEV, maxL = Math.log2(mt.maxLum) + meter.maxEV;
+      if (meter.anchor) {
+        const a = DAY_CARD_LOG + meter.anchor[0];
+        minL = a - meter.anchor[1];
+        maxL = a + meter.anchor[2];
+      }
+      if (meter.dayCap !== undefined) {
+        const w = THREE.MathUtils.smoothstep(L.sunVisibility, 0.2, 0.8);
+        if (w > 0) maxL = Math.max(minL, THREE.MathUtils.lerp(maxL, Math.min(maxL, priorL + meter.dayCap), w));
+      }
+      (au.uClamp.value as THREE.Vector4).set(minL, maxL, 0, bias);
+      (au.uKey.value as THREE.Vector4).copy(keyU);
+      (au.uKeyDeep.value as THREE.Vector3).set(mt.nightKeyStops * envLook.night, mt.darkLog + 4, mt.darkLog - 2);
+      const fast = this.fastAdapt > 0 ? 4 : 1;
+      (au.uAdapt.value as THREE.Vector4).set(dt, mt.speedUp * fast, mt.speedDown * fast, this.needReset ? 1 : 0);
+      (au.uMaxRate.value as THREE.Vector2).set(mt.maxRateUp * fast, mt.maxRateDown * fast);
+      (au.uSubj.value as THREE.Vector4).set(mt.subjectHeadroom + meter.subjHead, 0.015, 0.06, view.onboard || meter.subjW <= 1 ? 0 : 1);
       // "black" = below anything a sky can be (moonless night sky ~2^-16), i.e. space / unlit void
       (au.uPrior.value as THREE.Vector4).set(priorL, mt.priorWeight * Math.min(1, L.sunVisibility * 1.5), -17.5, set.autoExposure ? 0 : 1);
       au.uManualL.value = set.manualEV;

@@ -21,6 +21,12 @@ What changed in this pass is in `post.md` (Exposure section) and `env.md` (Sky /
    exposure handles it (it now stops down at 24 EV/s), but the first ~0.7 s after ignition is still blown out and
    AgX turns it cream/beige. About 2 stops less radiance would read better. A more saturated plume-light colour
    (e.g. (1, 0.42, 0.12) instead of (1, 0.5, 0.2)) would help too: AgX desaturates bright orange toward cream.
+   **Follow-up (pad launch-mount cam, T-2..+4):** plume-lit smoke measures 2^2..2^4.5, while sunlit white
+   paint is 2^0.8. From night-launch photo exposures (EV100 ~14 on plume-lit smoke), I estimate
+   ~2000-5000 cd/m² = **~2^-3..2^-1.5 scene units**, i.e. about 5 stops lower. At that level, daylight
+   ignition smoke would read white (sunlit) with an orange base. The smoke-to-twilight-sky gap would drop from ~16 to ~11
+   stops. Post now caps the daylight stop-down (pad/deck `dayCap`) so a morning sky stays blue. At twilight and night
+   the black sky between smoke puffs is correct for this radiance, and only a lower smoke radiance can fix it.
 4. Big blurry beige puffs right in front of the camera in the max-Q chase (still there with `clouds=0`), and the
    entry-burn/landing-burn blob scale (T+398 is a frame-filling starburst).
 
