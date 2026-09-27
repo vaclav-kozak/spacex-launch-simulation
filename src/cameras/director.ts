@@ -3,7 +3,9 @@
 // applies it with minimum shot lengths and user overrides. OWNER: cameras.
 import type { CameraMode } from '../core/context';
 import type { SimEventType, SimSnapshot } from '../core/types';
+import * as THREE from 'three';
 import { OCISLY } from '../core/vehicleSpec';
+import { sitePosition } from './rigs';
 
 export interface Shot {
   mode: CameraMode;
@@ -16,6 +18,13 @@ export type StoryKey = 'S1' | 'S2' | 'FAIRING' | 'REPLAY';
 export type EvT = (type: SimEventType) => number | undefined;
 
 const chase: Shot = { mode: 'chase' };
+const _site = new THREE.Vector3();
+
+/** Cut to the deck cam this many seconds before the PREDICTED touchdown. The in-burn prediction is a
+ * constant-deceleration estimate that ignores the ~2 s terminal creep (last 5 m at 2-3 m/s), so this
+ * lands the cut ~6 s before the predicted and ~8 s before the actual touchdown (webcast: the booster
+ * appears in the deck cam's sky ~7 s out). */
+export const DECK_CUT_TGO = 6.2;
 
 /** Seconds until booster touchdown (predicted), or Infinity. */
 export function boosterTimeToGo(snap: SimSnapshot): number {
@@ -65,15 +74,17 @@ function boosterShot(snap: SimSnapshot, evT: EvT): Shot {
   const tgo = boosterTimeToGo(snap);
   switch (s1.phase) {
     case 'LANDING_BURN':
-      if (tgo < 7.5) return { mode: 'deck', urgent: true };
+      if (tgo < DECK_CUT_TGO) return { mode: 'deck', urgent: true };
       return { mode: 'onboard_down', urgent: true };
     case 'AERO': {
       if (tgo < 4) return { mode: 'onboard_down' };
       const since = t - (evT('ENTRY_BURN_END') ?? t);
-      if (since < 12) return chase;
-      if (since < 30) return { mode: 'long_lens', preset: 'ship' };
-      if (since < 42) return { mode: 'cinematic', preset: 'flyby' };
-      if (since < 58) return chase;
+      // the support ship's tracker only makes sense once the booster is inside ~15 km (further out it
+      // is a speck in haze even at the longest focal length); a flyby at 1 km/s is over in a blink
+      const inRange = sitePosition('ship', snap, _site).distanceTo(s1.pos) < 15_000;
+      if (since < 14) return chase; // side-on: plume dies, the horizon behind
+      if (since < 30) return { mode: 'onboard_down' }; // grid fins steering, ocean below
+      if (since < 46 || !inRange) return chase;
       return { mode: 'long_lens', preset: 'ship' };
     }
     case 'ENTRY_BURN': {
@@ -99,7 +110,9 @@ function secondStageShot(snap: SimSnapshot, evT: EvT): Shot {
   const secoDone = seco !== undefined && t >= seco && s2.thrust < 1;
   const deploy = evT('PAYLOAD_DEPLOY');
   if (snap.bodies.PAYLOAD.status === 'deployed' || (deploy !== undefined && secoDone && t > deploy - 4)) return chase;
-  if (secoDone) return t - seco! < 25 ? { mode: 'onboard_engine' } : chase;
+  // after SECO: stay on the engine cam while the extension visibly cools (~1480 K -> dull red in
+  // ~8 s), then cut away before auto-exposure lifts the dark, unlit bell to a grey ball
+  if (secoDone) return t - seco! < 13 ? { mode: 'onboard_engine' } : chase;
   const fs = evT('FAIRING_SEP');
   if (fs !== undefined && t > fs - 4 && t < fs + 10) return chase;
   const ses = evT('SES1');

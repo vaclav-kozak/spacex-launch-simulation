@@ -32,6 +32,8 @@ click = maximize/restore, left-drag = orbit (switches to orbit from current pose
 * `split=1` with `cam=` — force the mode on that body but keep the auto split.
 * `director=0` — director off (views stay on chase unless user picks).
 * `labels=0` / `hud=0` — hide viewport labels.
+* DEV: `s2cam=angle,r,y,tilt,roll,fov` overrides the S2 engine-cam mount (S2 body frame). `padup=heading,dist,h,aimY,fov,aimOff`
+  overrides the pad "launch mount" camera.
 * `camfake=1|splash|rud` — DEV ONLY: replaces `sim.getSnapshot` with a keyframed full mission
   (sep T+150, flip, entry 380–400, landing burn 485, touchdown 510 on OCISLY, SECO 525) for testing
   cameras/tiling without the real sim. `splash`/`rud` = failure variants.
@@ -52,6 +54,43 @@ click = maximize/restore, left-drag = orbit (switches to orbit from current pose
 * `snapshot.landing.touchdownT` (predicted) drives the deck-cam cut; falls back to 2h/|v|.
 * `BodyState.vel` must be populated (chase travel direction, lag, long-lens lead).
 * Replay: cameras only need `ctx.replay` and the snapshot fed to `update()` during replay.
+
+## Rig / director behaviour (2026-09-27 polish)
+* **S2 engine cam:** a pod on the aft-skirt rim at body angle 115°, r 1.95, y 3.85, tilted 28° inward, fov 64
+  (16:9). The bell hangs from the top of the frame and the Earth limb crosses it during the burn. Onboard cams are
+  **hor+** in narrow tiles: they keep the 16:9 horizontal coverage (vertical fov capped at 92°), so the bell no
+  longer fills a half-width split tile.
+* **Chase:** per-phase `fill` (share of the frame for the body plus a slice of plume), fitted to the body's
+  *projected* extent in the 16:9 frame. When 48° is not wide enough it dollies out (`pull` ≤ 3), with a
+  **hard cap of 250 m**. Measured at max-Q the chase is 104–110 m. Descent phases use `level` offsets
+  (horizontal travel direction), so ENTRY_BURN, AERO and LANDING_BURN are side-on with the horizon behind.
+  * The audio report "listener 64 → 2460 m at T+72" is not the camera. It is the retarded-time source distance:
+    at Mach 1.5 the vehicle outruns its own sound, so a camera flying alongside hears emissions from seconds ago.
+* **Long lens:** fits the *projected* length (foreshortened booster falling toward the ship) with a
+  plume-width floor. A plume-heavy frame uses a wider fill (0.42 → 0.24), so the high-altitude plume reads as a
+  shape against the sky instead of a flat wall. The near site is on the ridge SE of the pad (900 m / 150°);
+  the old site saw only hillside.
+* **Pad "launch mount" (up):** on the mount's east walkway, 100°/4.4 m/h 5.3, looking up the vehicle side
+  (aim 40 m, 1.5 m off-axis) at fov 70. The old spot under the SE girder framed mostly steel.
+* **Deck PTZ:** keeps the booster inside ~88% of the half-frame. Recentring starts earlier at wide fov.
+* **Director, booster descent:**
+  * AERO: chase for 14 s after ENTRY_BURN_END, then onboard_down to +30 s, then chase.
+  * Support-ship long lens only when the booster is inside 15 km of the ship site (≥ ~25% of the frame at the
+    longest lens). At T+440 it is 35 km out, so that is chase now (look-dev camera request 2).
+  * LANDING_BURN: onboard_down, then **deck cut at predicted tgo < `DECK_CUT_TGO` = 6.2 s**. This is ~7.6 s
+    before the actual touchdown (dir3 run: cut at T+499.5, touchdown T+506.7).
+* **Director, S2:** the engine cam stays 13 s after SECO (the cooling glow), then chase.
+* **PiP:** bottom-left, clear of the HUD band × `--z` (`uiZoom()` mirrors HUD.ts); the UI shifts the captions
+  right of it. Split tiles still run full height under the overlay, like the main view.
+
+## Requests
+* **Sim:** during LANDING_BURN, `landing.touchdownT` runs ~1.9 s early. It is a constant-deceleration prediction and
+  ignores the terminal creep (the last ~5 m at 2–3 m/s). `DECK_CUT_TGO` compensates; a creep-aware prediction
+  would let it go back to ~8 s.
+* **Look-dev:** the post-SECO `onboard_engine` meter lifts the unlit bell to mid-grey (see models.md).
+  Look-dev camera request 1 (twilight long_lens:ground into the plume wall, T+140..200): the current director
+  is on chase / S2 engine cam in that window, and the long lens widens for plume-heavy frames.
+* **VFX:** the MVac plume haze is drawn over the lower bell in the engine cam.
 
 ## Terrain
 Cameras are clamped above an approximate surface: ocean 0 m, pad terrace `PAD_ELEVATION` within 1.5 km of

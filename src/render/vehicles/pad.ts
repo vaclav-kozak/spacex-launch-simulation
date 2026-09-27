@@ -53,18 +53,27 @@ export class PadVisual {
     std('Pad_Scorch', { color: lin(0x2c2a28), roughness: 0.95 });
     std('Pad_Ground', { map: tex('pad_ground_albedo.jpg', { srgb: true, repeat: true }), roughness: 0.95 });
     std('Pad_Asphalt', { color: lin(0x3a3a3a), roughness: 0.85 });
-    std('Pad_Steel', { color: lin(0x8a8c8e), roughness: 0.5, metalness: 0.8 });
-    std('Pad_SteelDark', { color: lin(0x3c3e40), roughness: 0.55, metalness: 0.7 });
+    // painted / galvanised steel: tiling weathering maps (rain streaks, soot, rust bleed) on the
+    // box-projected 4 m UVs from build_slc4e.py (multiplies the base colour / roughness)
+    const grime = tex('pad_grime_albedo.jpg', { srgb: true, repeat: true });
+    const grimeR = tex('pad_grime_rough.jpg', { repeat: true });
+    const steel = (name: string, color: number, roughness: number, metalness: number) =>
+      std(name, { color: lin(color), roughness, metalness, map: grime, roughnessMap: grimeR });
+    steel('Pad_Steel', 0x8a8c8e, 0.55, 0.8);
+    steel('Pad_SteelDark', 0x3c3e40, 0.62, 0.7);
+    steel('Pad_SteelSoot', 0x1e1c1a, 0.9, 0.3);       // launch-table ring: exhaust soot
     std('Pad_SteelRust', { color: lin(0x6a4a36), roughness: 0.75, metalness: 0.4 });
-    std('Pad_White', { color: lin(0xd6d6d2), roughness: 0.6, metalness: 0.1 });
+    steel('Pad_White', 0xd6d6d2, 0.66, 0.1);
     std('Pad_Hangar', { color: lin(0xcfcfca), roughness: 0.55, metalness: 0.3 });
     std('Pad_HangarDoor', { color: lin(0xb4b4b0), roughness: 0.5, metalness: 0.4 });
-    std('Pad_Tower', { color: lin(0xb8b8b4), roughness: 0.45, metalness: 0.7 });
-    std('Pad_TowerRed', { color: lin(0xb03020), roughness: 0.6, metalness: 0.2 });
+    steel('Pad_Tower', 0xb8b8b4, 0.5, 0.7);
+    steel('Pad_TowerRed', 0xb03020, 0.66, 0.2);
     std('Pad_Tank', { color: lin(0xe2e2de), roughness: 0.45, metalness: 0.3 });
-    std('Pad_TE', { color: lin(0xd8d8d4), roughness: 0.55, metalness: 0.3 });
-    std('Pad_Pipe', { color: lin(0xa8a8a4), roughness: 0.45, metalness: 0.8 });
-    std('Pad_Yellow', { color: lin(0xd0a018), roughness: 0.6 });
+    steel('Pad_TE', 0xd8d8d4, 0.6, 0.3);
+    steel('Pad_Pipe', 0xa8a8a4, 0.5, 0.8);
+    steel('Pad_Yellow', 0xd0a018, 0.66, 0);
+    // galvanised bar grating (1 m tiles; the map carries the bar / gap pattern)
+    std('Pad_Grating', { map: tex('pad_grating_albedo.jpg', { srgb: true, repeat: true }), roughness: 0.6, metalness: 0.55 });
     std('Pad_Cable', { color: lin(0x202020), roughness: 0.7 });
     const fl = std('Pad_Flood', { color: 0x222222, emissive: new THREE.Color(1, 0.9, 0.75), emissiveIntensity: 0 });
     this.floodMats.push(fl);
@@ -122,10 +131,13 @@ export class PadVisual {
     const k = tod === 'night' ? 1 : tod === 'twilight' ? 0.5 : 0;
     for (const m of this.floodMats) m.emissiveIntensity = 60 * k;
     if (this.obstMat) this.obstMat.emissiveIntensity = tod === 'night' ? 30 : tod === 'twilight' ? 18 : 6;
+    // the floods are on from the end of civil twilight at real launches; at twilight they run at ~0.15 of
+    // the night level (the sky-lit pad is ~2 stops darker than the vehicle under the floods, per look-dev)
+    const fk = tod === 'night' ? 1 : tod === 'twilight' ? 0.15 : 0;
     for (const s of this.spots) {
-      s.visible = this.night;
+      s.visible = fk > 0;
       // candela-ish in the app's radiometric units: ~0.4 irradiance at the vehicle (≈ lit concrete at night)
-      s.intensity = this.night ? 1.6e4 : 0;
+      s.intensity = 1.6e4 * fk;
     }
   }
 

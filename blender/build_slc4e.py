@@ -40,6 +40,7 @@ PALETTE.update({
     'Pad_Concrete': ((0.55, 0.54, 0.5), 0.9, 0.0), 'Pad_Apron': ((0.55, 0.54, 0.5), 0.9, 0.0),
     'Pad_Pit': ((0.01, 0.01, 0.01), 1.0, 0.0), 'Pad_TE': ((0.8, 0.8, 0.78), 0.55, 0.3),
     'Pad_Hangar': ((0.75, 0.75, 0.72), 0.55, 0.3), 'Pad_Tank': ((0.85, 0.85, 0.83), 0.45, 0.3),
+    'Pad_Grating': ((0.3, 0.3, 0.29), 0.7, 0.6), 'Pad_SteelSoot': ((0.08, 0.075, 0.07), 0.8, 0.3),
 })
 
 
@@ -124,54 +125,239 @@ def build_common():
     return root
 
 
+# ================================================================================ detail helpers
+def ibeam(mb, c, L, axis, dep_axis, h, w, mat, tf=0.07, tw=0.05):
+    """axis-aligned I-beam: length L along `axis`, section depth h along `dep_axis`, flange width w"""
+    third = [a for a in 'xyz' if a not in (axis, dep_axis)][0]
+
+    def size(l_, d_, w_):
+        s_ = {axis: l_, dep_axis: d_, third: w_}
+        return (s_['x'], s_['y'], s_['z'])
+
+    def at(d):
+        o = {'x': 0.0, 'y': 0.0, 'z': 0.0}
+        o[dep_axis] = d
+        return (c[0] + o['x'], c[1] + o['y'], c[2] + o['z'])
+    mb.box(at(h / 2 - tf / 2), size(L, tf, w), mat)
+    mb.box(at(-h / 2 + tf / 2), size(L, tf, w), mat)
+    mb.box(tuple(c), size(L, h - 2 * tf, tw), mat)
+
+
+def rail_run(mb, pts, lod, h=1.07, post=1.6, mat='Pad_Yellow'):
+    """OSHA-style handrail (posts + top / mid rails) along a horizontal polyline"""
+    pts = [Vector(p) for p in pts]
+    for a, b in zip(pts[:-1], pts[1:]):
+        L = (b - a).length
+        n = max(1, math.ceil(L / post))
+        for i in range(n + 1):
+            q = a.lerp(b, i / n)
+            mb.box((q.x, q.y + h / 2, q.z), (0.05, h, 0.05), mat)
+        for y in ((h, 0.045), (h * 0.52, 0.03))[: 2 if lod == 0 else 1]:
+            mb.cyl(a + Vector((0, y[0], 0)), b + Vector((0, y[0], 0)), y[1] / 2 + 0.005, mat, seg=4, caps=False)
+        if lod == 0:  # toe board
+            m = (a + b) / 2
+            d = (b - a).normalized()
+            mb.box((m.x, m.y + 0.06, m.z), (0.02, 0.12, L), mat, M=rot_y_to(d))
+
+
+def stair(mb, bottom, top, width, lod, mat='Pad_SteelDark'):
+    """straight steel stair: two channel stringers, grating treads, handrails both sides"""
+    bottom, top = Vector(bottom), Vector(top)
+    run = top - bottom
+    L = run.length
+    fwd = run.normalized()
+    hz = Vector((fwd.x, 0, fwd.z)).normalized()
+    lat = Y_AX.cross(hz).normalized()
+    M = facing(fwd)
+    for sgn in (-1, 1):
+        m = (bottom + top) / 2 + lat * (sgn * width / 2)
+        mb.box(tuple(m), (0.08, 0.3, L), mat, M=M)
+        if lod == 0:
+            a = bottom + lat * (sgn * (width / 2 + 0.03))
+            b = top + lat * (sgn * (width / 2 + 0.03))
+            for k in range(4):
+                q = a.lerp(b, k / 3)
+                mb.box((q.x, q.y + 0.5, q.z), (0.05, 1.0, 0.05), 'Pad_Yellow')
+            mb.cyl(a + Vector((0, 1.0, 0)), b + Vector((0, 1.0, 0)), 0.025, 'Pad_Yellow', seg=4, caps=False)
+    n = max(3, int(round((top.y - bottom.y) / 0.21)))
+    Mh = rot_y_to(hz)
+    for i in range(n):
+        q = bottom.lerp(top, (i + 0.5) / n)
+        mb.box((q.x, q.y + 0.05, q.z), (width, 0.04, 0.26), 'Pad_Grating', M=Mh)
+
+
+def pipe_run(mb, pts, r, mat, lod, seg=None):
+    seg = seg or (10 if lod == 0 else 6)
+    if len(pts) == 2:
+        mb.cyl(pts[0], pts[1], r, mat, seg=seg, caps=False)
+    else:
+        mb.tube([Vector(p) for p in pts], r, mat, seg=seg, caps=False)
+
+
 # ================================================================================ launch mount
+MOUNT_C = 4.6          # column centres (+-x, +-z)
+MOUNT_TOP = 4.7        # top of the perimeter girders / walkway grating
+RING_R0, RING_R1 = 2.05, 3.4
+
+
 def launch_mount(mb, lod):
     # flame-duct opening (dark), trench-aligned 6 x 8 m, with a raised curb
     mb.box(tuple(tr(0, 0.05, 0)), (6.0, 0.1, 8.0), 'Pad_Pit', M=M_TR, skip=('-y',))
     for (t, s, w, l) in [(3.3, 0, 0.6, 8.6), (-3.3, 0, 0.6, 8.6), (0, 4.3, 7.2, 0.6), (0, -4.3, 7.2, 0.6)]:
         mb.box(tuple(tr(t, 0.2, s)), (w, 0.4, l), 'Pad_ConcreteDark', M=M_TR, uv_scale=1 / 8)
-    # steel launch-mount frame: 4 columns on footings, beams on the west/north/east sides only (the
-    # south stays open so the pad "engine" camera at heading 205 deg / 17 m / 1.4 m sees the engines;
-    # the "launch mount" camera at 118 deg / 7.8 m sits just outside the SE column)
-    c = 4.6
+    # steel launch-mount frame: 4 built-up columns on footings; girders + bracing on the west / north /
+    # east sides only (the south stays open so the pad "engine" camera at heading 205 deg / 17 m / 1.4 m
+    # sees the engines; the "launch mount" camera sits outside the SE column)
+    c = MOUNT_C
     for sx in (-1, 1):
         for sz in (-1, 1):
             mb.box((sx * c, 0.3, sz * c), (1.8, 0.6, 1.8), 'Pad_Concrete', uv_scale=1 / 8)
-            mb.box((sx * c, 2.5, sz * c), (0.9, 3.8, 0.9), 'Pad_SteelDark')
-        mb.box((sx * c, 4.3, 0), (0.9, 0.8, 2 * c + 0.9), 'Pad_SteelDark')
-        for dz in (-1.2, 1.2):
-            mb.box((sx * (c + 3.4) / 2, 4.75, dz), (c - 3.4 + 0.2, 0.9, 0.5), 'Pad_SteelDark')
+            if lod == 0:
+                ibeam(mb, (sx * c, 2.5, sz * c), 3.8, 'y', 'x', 0.9, 0.8, 'Pad_SteelDark', tf=0.09, tw=0.07)
+                mb.box((sx * c, 0.64, sz * c), (1.25, 0.08, 1.25), 'Pad_SteelDark')          # base plate
+                for bx in (-0.5, 0.5):
+                    for bz in (-0.5, 0.5):
+                        mb.cyl((sx * c + bx, 0.6, sz * c + bz), (sx * c + bx, 0.8, sz * c + bz), 0.045, 'Pad_Steel', seg=6)
+                # gussets
+                for g in (-1, 1):
+                    mb.box((sx * c, 0.95, sz * c + g * 0.52), (0.06, 0.55, 0.26), 'Pad_SteelDark')
+            else:
+                mb.box((sx * c, 2.5, sz * c), (0.9, 3.8, 0.9), 'Pad_SteelDark')
+    # perimeter girders (east / west along z, north along x)
+    gy = MOUNT_TOP - 0.4
+    for sx in (-1, 1):
         if lod == 0:
-            # diagonal braces on the east / west faces
-            mb.cyl((sx * c, 0.6, c - 0.4), (sx * c, 3.9, -c + 0.4), 0.14, 'Pad_SteelDark', seg=6)
-    mb.box((0, 4.3, -c), (2 * c - 0.9, 0.8, 0.9), 'Pad_SteelDark')
-    r0, r1 = 2.05, 3.4
-    rm = (r0 + r1) / 2
+            ibeam(mb, (sx * c, gy, 0), 2 * c + 0.9, 'z', 'y', 0.8, 0.6, 'Pad_SteelDark')
+            for k in range(-4, 5):
+                for side in (-1, 1):
+                    mb.box((sx * c + side * 0.17, gy, k * 1.05), (0.28, 0.66, 0.025), 'Pad_SteelDark')
+        else:
+            mb.box((sx * c, gy, 0), (0.6, 0.8, 2 * c + 0.9), 'Pad_SteelDark')
+    if lod == 0:
+        ibeam(mb, (0, gy, -c), 2 * c - 0.9, 'x', 'y', 0.8, 0.6, 'Pad_SteelDark')
+        for k in range(-3, 4):
+            for side in (-1, 1):
+                mb.box((k * 1.05, gy, -c + side * 0.17), (0.025, 0.66, 0.28), 'Pad_SteelDark')
+    else:
+        mb.box((0, gy, -c), (2 * c - 0.9, 0.8, 0.6), 'Pad_SteelDark')
+    # X-bracing on the three closed faces
+    if lod < 2:
+        lo, hi = 0.75, gy - 0.45
+        faces = [((-c, lo, -c + 0.5), (-c, hi, c - 0.5)), ((-c, lo, c - 0.5), (-c, hi, -c + 0.5)),
+                 ((c, lo, -c + 0.5), (c, hi, c - 0.5)), ((c, lo, c - 0.5), (c, hi, -c + 0.5)),
+                 ((-c + 0.5, lo, -c), (c - 0.5, hi, -c)), ((c - 0.5, lo, -c), (-c + 0.5, hi, -c))]
+        for a, b in faces:
+            mb.cyl(a, b, 0.13 if lod == 0 else 0.16, 'Pad_SteelDark', seg=6 if lod == 0 else 4, caps=False)
+    # cross beams: side girders -> table ring
+    for sx in (-1, 1):
+        for dz in (-1.2, 1.2):
+            if lod == 0:
+                ibeam(mb, (sx * (c + RING_R1) / 2, 4.75, dz), c - RING_R1 + 0.2, 'x', 'y', 0.9, 0.5, 'Pad_SteelDark')
+            else:
+                mb.box((sx * (c + RING_R1) / 2, 4.75, dz), (c - RING_R1 + 0.2, 0.9, 0.5), 'Pad_SteelDark')
+    for dx in (-1.2, 1.2):  # north girder -> ring
+        if lod == 0:
+            ibeam(mb, (dx, 4.75, -(c + RING_R1) / 2), c - RING_R1 + 0.2, 'z', 'y', 0.9, 0.5, 'Pad_SteelDark')
+    # launch table ring (sooted), outer skirt band, bolted flange blocks
+    rm = (RING_R0 + RING_R1) / 2
     chord = 2 * rm * math.tan(math.pi / 8) + 0.25
     for k in range(8):
         a = (k + 0.5) * math.pi / 4
         M = Matrix.Rotation(-a, 3, Y_AX)
-        mb.box((rm * math.cos(a), 5.02, rm * math.sin(a)), (r1 - r0, 0.46, chord), 'Pad_Steel', M=M)
-    # hold-down clamps between the legs (body angles 45/135/225/315, body X = pad X on the pad)
+        mb.box((rm * math.cos(a), 5.02, rm * math.sin(a)), (RING_R1 - RING_R0, 0.46, chord), 'Pad_SteelSoot', M=M)
+        if lod == 0:
+            ro = RING_R1 + 0.03
+            mb.box((ro * math.cos(a), 4.72, ro * math.sin(a)), (0.06, 0.5, 2 * RING_R1 * math.tan(math.pi / 8) + 0.06), 'Pad_SteelSoot', M=M)
+            for j in (-1, 1):
+                aa = a + j * 0.2
+                mb.box((rm * math.cos(aa), 5.29, rm * math.sin(aa)), (0.5, 0.08, 0.16), 'Pad_Steel', M=Matrix.Rotation(-aa, 3, Y_AX))
+    # walkway grating around the table on the west / north / east sides + handrails, west stair
+    e = c + 0.45
+    y = MOUNT_TOP + 0.03
+    if lod < 2:
+        mb.box((0, y, -(e + RING_R1 - 0.3) / 2), (2 * e, 0.06, e - RING_R1 + 0.3), 'Pad_Grating', skip=('-y',) if lod else ())
+        for sx in (-1, 1):
+            z0, z1 = -RING_R1 + 0.3, 2.2
+            mb.box((sx * (e + RING_R1 - 0.3) / 2, y, (z0 + z1) / 2), (e - RING_R1 + 0.3, 0.06, z1 - z0), 'Pad_Grating')
+    if lod == 0:
+        yr = y + 0.03
+        rail_run(mb, [(-e, yr, 2.2), (-e, yr, -1.1)], lod)            # gap for the stair landing
+        rail_run(mb, [(-e, yr, -3.3), (-e, yr, -e), (e, yr, -e), (e, yr, 2.2)], lod)
+        for sx in (-1, 1):
+            rail_run(mb, [(sx * e, yr, 2.2), (sx * (RING_R1 + 0.1), yr, 2.2)], lod)
+        # stair down the west side (landing at the NW corner)
+        xs = -e - 0.9
+        stair(mb, (xs, 0.0, 4.6), (xs, MOUNT_TOP, -1.2), 1.0, lod)
+        mb.box((xs + 0.1, MOUNT_TOP - 0.05, -2.2), (1.5, 0.1, 2.1), 'Pad_Grating')
+        for zz in (-3.1, -1.3):
+            mb.box((xs - 0.6, (MOUNT_TOP - 0.1) / 2, zz), (0.2, MOUNT_TOP - 0.1, 0.2), 'Pad_SteelDark')
+        rail_run(mb, [(xs - 0.65, MOUNT_TOP, -1.2), (xs - 0.65, MOUNT_TOP, -3.25), (-e, MOUNT_TOP, -3.25)], lod)
+    # hold-down clamps (body angles 45/135/225/315, body X = pad X on the pad)
     for k in range(4):
         a = (45 + 90 * k) * D2R
         M = Matrix.Rotation(-a, 3, Y_AX)
         rad = Vector((math.cos(a), 0, math.sin(a)))
-        c = lambda r, y: tuple(rad * r + Vector((0, y, 0)))
-        mb.box(c(2.55, 5.5, ), (0.9, 0.5, 0.8), 'Pad_SteelDark', M=M)
+        tng = Vector((-math.sin(a), 0, math.cos(a)))
+        cc = lambda r, y, t=0.0: tuple(rad * r + tng * t + Vector((0, y, 0)))
+        mb.box(cc(2.55, 5.5), (0.9, 0.5, 0.8), 'Pad_SteelDark', M=M)
+        mb.box(cc(2.02, 5.85), (0.28, 0.95, 0.5), 'Pad_Steel', M=M)
+        mb.box(cc(1.93, 6.25), (0.2, 0.18, 0.44), 'Pad_Steel', M=M)
+        mb.cyl(cc(3.1, 5.3), cc(2.25, 6.1), 0.11, 'Pad_Pipe', seg=8 if lod == 0 else 5)
         if lod == 0:
-            mb.box(c(2.02, 5.85), (0.28, 0.95, 0.5), 'Pad_Steel', M=M)
-            mb.box(c(1.93, 6.25), (0.2, 0.18, 0.44), 'Pad_Steel', M=M)
-            mb.cyl(c(3.1, 5.3), c(2.25, 6.1), 0.11, 'Pad_Pipe', seg=8)
+            for t in (-0.33, 0.33):   # side cheek plates with the pivot pin
+                mb.box(cc(2.2, 5.9, t), (0.75, 0.75, 0.05), 'Pad_SteelDark', M=M)
+            mb.cyl(cc(2.2, 6.0, -0.4), cc(2.2, 6.0, 0.4), 0.07, 'Pad_Steel', seg=8)
+            mb.cyl(cc(2.75, 5.3), cc(2.35, 6.0), 0.055, 'Pad_Steel', seg=6)          # piston rod
+            mb.cyl(cc(3.15, 5.25), cc(3.15, 5.9), 0.14, 'Pad_SteelDark', seg=8)       # accumulator
+            mb.tube([Vector(cc(3.15, 5.9)), Vector(cc(3.25, 6.1, 0.15)), Vector(cc(2.9, 6.05, 0.25)), Vector(cc(2.55, 5.95, 0.12))],
+                    0.03, 'Pad_Cable', seg=4, caps=False)
     if lod == 0:
-        # deluge ring + risers
+        # deluge: spray header under the table ring with nozzles aimed at the engines' exhaust path
+        pts = [Vector((3.0 * math.cos(TAU * k / 24), 4.42, 3.0 * math.sin(TAU * k / 24))) for k in range(24)]
+        mb.tube(pts, 0.1, 'Pad_SteelSoot', seg=6, closed=True)
+        for k in range(12):
+            a = TAU * (k + 0.5) / 12
+            p = Vector((3.0 * math.cos(a), 4.42, 3.0 * math.sin(a)))
+            q = Vector((2.72 * math.cos(a), 4.2, 2.72 * math.sin(a)))
+            mb.cyl(p, q, 0.05, 'Pad_SteelSoot', seg=5)
+        for sx in (-1, 1):   # risers at the north columns
+            pipe_run(mb, [(sx * (c - 0.7), 0.0, -c + 0.7), (sx * (c - 0.7), 4.2, -c + 0.7),
+                          (sx * 2.3, 4.42, -1.9)], 0.12, 'Pad_Pipe', lod, seg=6)
+        # ground deluge ring + risers
         pts = [hd(45 * k, 10.0, 0.45) for k in range(1, 8)]      # open toward the TE rails (north)
         mb.tube(pts, 0.25, 'Pad_Pipe', seg=10)
         for p in pts:
             mb.box((p.x, 0.25, p.z), (0.5, 0.5, 0.5), 'Pad_SteelDark')
-        # T-0 umbilical box + cable tray on the TE side
+            mb.cyl((p.x, 0.5, p.z), (p.x * 0.93, 1.1, p.z * 0.93), 0.08, 'Pad_Pipe', seg=6)
+        # T-0 umbilical box (service panel doors, quick-disconnect plate), cable trays + propellant lines
         mb.box((0, 1.6, -5.6), (2.6, 3.2, 1.2), 'Pad_SteelDark')
-        mb.box((0, 0.45, -9.0), (1.0, 0.25, 8.0), 'Pad_Cable')
+        for dx in (-0.65, 0.65):
+            mb.box((dx, 1.5, -4.98), (1.15, 2.6, 0.04), 'Pad_White')
+        mb.box((0, 3.35, -5.2), (1.4, 0.3, 1.4), 'Pad_Steel')
+        # cable tray (west of centre) and pipe rack (east): TE base -> umbilical box, on stands
+        for (x0, w) in [(-2.2, 0.7)]:
+            z0, z1 = -26.0, -6.2
+            mb.box((x0, 0.62, (z0 + z1) / 2), (w, 0.04, z1 - z0), 'Pad_Steel')
+            for sgn in (-1, 1):
+                mb.box((x0 + sgn * w / 2, 0.7, (z0 + z1) / 2), (0.03, 0.16, z1 - z0), 'Pad_Steel')
+            mb.box((x0, 0.7, (z0 + z1) / 2), (w - 0.12, 0.12, z1 - z0), 'Pad_Cable')
+            for zz in range(int(z0) + 1, int(z1), 3):
+                mb.box((x0, 0.3, zz), (w + 0.2, 0.06, 0.1), 'Pad_SteelDark')
+                mb.box((x0, 0.3, zz), (0.08, 0.6, 0.08), 'Pad_SteelDark')
+            pipe_run(mb, [(x0, 0.7, z1), (x0 * 0.5, 0.7, -5.9), (-0.6, 1.2, -5.0)], 0.12, 'Pad_Cable', lod, seg=6)
+        rack = [(1.6, 0.95, 0.22, 'Pad_White'), (2.15, 0.95, 0.14, 'Pad_Pipe'), (2.55, 0.95, 0.07, 'Pad_Pipe'),
+                (2.8, 0.95, 0.07, 'Pad_Pipe')]
+        for (x, y0, r, mat) in rack:
+            pipe_run(mb, [(x, y0, -26.0), (x, y0, -7.6), (x * 0.45, y0, -6.3), (x * 0.3, 2.6, -6.2)], r, mat, lod)
+        for zz in range(-25, -7, 3):
+            mb.box((2.2, 0.72, zz), (1.7, 0.08, 0.12), 'Pad_SteelDark')
+            for x in (1.45, 2.95):
+                mb.box((x, 0.36, zz), (0.1, 0.72, 0.1), 'Pad_SteelDark')
+    elif lod == 1:
+        mb.box((0, 1.6, -5.6), (2.6, 3.2, 1.2), 'Pad_SteelDark')
+        mb.box((-2.2, 0.66, -16.1), (0.7, 0.12, 19.8), 'Pad_Cable')
+        mb.cyl((1.6, 0.95, -26.0), (1.6, 0.95, -7.0), 0.22, 'Pad_White', seg=6, caps=False)
+        mb.cyl((2.2, 0.95, -26.0), (2.2, 0.95, -7.0), 0.14, 'Pad_Pipe', seg=5, caps=False)
 
 
 # ================================================================================ trench exit
@@ -211,54 +397,128 @@ def trench_exit(mb, lod):
 
 
 # ================================================================================ transporter-erector
+def truss_arm(te, y, L, w, h, lod, z0):
+    """retracted umbilical / clamp arm: 4-chord box truss toward the vehicle (+Z) with a hose bundle"""
+    z1 = z0 + L
+    if lod > 0:
+        te.box((0, y, (z0 + z1) / 2), (w, h, L), 'Pad_TE')
+        return
+    for sx in (-1, 1):
+        for sy in (-1, 1):
+            te.box((sx * w / 2, y + sy * h / 2, (z0 + z1) / 2), (0.16, 0.16, L), 'Pad_TE')
+    n = max(2, int(round(L / 1.1)))
+    for i in range(n + 1):
+        z = z0 + L * i / n
+        for sx in (-1, 1):
+            te.box((sx * w / 2, y, z), (0.1, h, 0.1), 'Pad_TE')
+        for sy in (-1, 1):
+            te.box((0, y + sy * h / 2, z), (w, 0.1, 0.1), 'Pad_TE')
+        if i < n:
+            za, zb = (z, z + L / n) if i % 2 else (z + L / n, z)
+            for sx in (-1, 1):
+                te.cyl((sx * w / 2, y - h / 2, za), (sx * w / 2, y + h / 2, zb), 0.045, 'Pad_TE', seg=4, caps=False)
+    # carrier plate at the tip + hose bundle sagging back to the strongback
+    te.box((0, y - 0.1, z1 + 0.1), (w * 0.8, h * 0.9, 0.2), 'Pad_SteelDark')
+    for k, dx in enumerate((-0.18, 0.0, 0.18)):
+        r = 0.09 if k == 1 else 0.06
+        pts = [Vector((dx, y - h / 2 - 0.1, z1)), Vector((dx * 1.3, y - h / 2 - 0.55, z0 + L * 0.55)),
+               Vector((dx * 1.5, y - h / 2 - 0.45, z0 + L * 0.2)), Vector((dx * 1.5, y - h / 2 - 0.1, z0 - 0.3))]
+        te.tube(pts, r, 'Pad_Cable', seg=5, caps=False)
+
+
 def strongback(lod):
-    """TE strongback in its own frame: pivot at origin, +Y along the strongback, vehicle side +Z"""
+    """TE strongback in its own frame: pivot at origin, +Y along the strongback, vehicle side +Z.
+    Built-up box chords, a horizontal frame every 3.2 m with K-braced faces, interior grating decks,
+    a caged ladder on the back face, truss umbilical arms with hose bundles and a propellant / cable
+    riser up the vehicle face."""
     te = MB()
     hx, hz = 2.3, 1.2
-    ch = 0.7 if lod < 2 else 4.6
     if lod == 2:
         te.box((0, TE_H / 2, 0), (4.6 + 0.7, TE_H, 2.4 + 0.7), 'Pad_TE')
         return te
+    ch = 0.7
     for sx in (-1, 1):
         for sz in (-1, 1):
-            te.box((sx * hx, TE_H / 2, sz * hz), (ch, TE_H, ch), 'Pad_TE')
+            if lod == 0:   # built-up chord: two flange plates + web (reads as a box with shadow lines)
+                te.box((sx * hx, TE_H / 2, sz * hz), (ch, TE_H, ch * 0.6), 'Pad_TE')
+                te.box((sx * hx, TE_H / 2, sz * (hz + ch * 0.3 - 0.03)), (ch + 0.08, TE_H, 0.06), 'Pad_TE')
+                te.box((sx * hx, TE_H / 2, sz * (hz - ch * 0.3 + 0.03)), (ch + 0.08, TE_H, 0.06), 'Pad_TE')
+            else:
+                te.box((sx * hx, TE_H / 2, sz * hz), (ch, TE_H, ch), 'Pad_TE')
     nlev = 20
+    dy = (TE_H - 2) / nlev
     for i in range(nlev + 1):
-        y = 1.0 + i * (TE_H - 2) / nlev
+        y = 1.0 + i * dy
         if lod == 1 and i % 2:
             continue
         for sz in (-1, 1):
-            te.box((0, y, sz * hz), (2 * hx, 0.32, 0.32), 'Pad_TE')
+            te.box((0, y, sz * hz), (2 * hx, 0.34, 0.3), 'Pad_TE')
         for sx in (-1, 1):
-            te.box((sx * hx, y, 0), (0.32, 0.32, 2 * hz), 'Pad_TE')
+            te.box((sx * hx, y, 0), (0.3, 0.34, 2 * hz), 'Pad_TE')
         if lod == 0 and i < nlev:
-            y1 = 1.0 + (i + 1) * (TE_H - 2) / nlev
-            sgn = 1 if i % 2 else -1
+            y1 = y + dy
+            ym = y + dy / 2
+            # K-bracing on the wide faces (front / back), single diagonals on the narrow sides
             for sz in (-1, 1):
-                te.cyl((-hx * sgn, y, sz * hz), (hx * sgn, y1, sz * hz), 0.12, 'Pad_TE', seg=6, caps=False)
+                for sx in (-1, 1):
+                    te.cyl((sx * hx, y + 0.2, sz * hz), (0, ym, sz * hz), 0.11, 'Pad_TE', seg=6, caps=False)
+                    te.cyl((0, ym, sz * hz), (sx * hx, y1 - 0.2, sz * hz), 0.11, 'Pad_TE', seg=6, caps=False)
+            sgn = 1 if i % 2 else -1
             for sx in (-1, 1):
-                te.cyl((sx * hx, y, -hz * sgn), (sx * hx, y1, hz * sgn), 0.1, 'Pad_TE', seg=6, caps=False)
-    # retracted umbilical / clamp arms toward the vehicle
-    for (y, L, w) in [(10.5, 2.4, 1.4), (41.5, 2.6, 1.6), (46.5, 2.2, 1.2), (61.0, 2.8, 1.8)]:
-        te.box((0, y, hz + 0.35 + L / 2), (w, 0.9, L), 'Pad_TE')
-        if lod == 0:
-            te.box((0, y - 0.7, hz + 0.35 + L * 0.6), (0.5, 0.5, L * 0.8), 'Pad_Cable')
+                te.cyl((sx * hx, y + 0.2, -hz * sgn), (sx * hx, y1 - 0.2, hz * sgn), 0.09, 'Pad_TE', seg=6, caps=False)
+            # gusset plates at the chord joints
+            for sx in (-1, 1):
+                for sz in (-1, 1):
+                    te.box((sx * (hx - 0.45), y, sz * hz), (0.55, 0.6, 0.04), 'Pad_TE')
+        if lod == 0 and i % 4 == 2 and i < nlev:
+            te.box((0, y + 0.19, 0), (2 * hx - 0.4, 0.05, 2 * hz - 0.35), 'Pad_Grating')     # service deck
+    # retracted umbilical / clamp arms toward the vehicle (S1 LOX/RP-1 QD, interstage, S2, fairing)
+    for (y, L, w, h) in [(10.5, 2.4, 1.4, 0.9), (41.5, 2.6, 1.6, 1.0), (46.5, 2.2, 1.2, 0.9), (61.0, 2.8, 1.8, 1.1)]:
+        truss_arm(te, y, L, w, h, lod, hz + 0.35)
+        if lod == 0:  # arm root: hinge block on the strongback face
+            te.box((0, y, hz + 0.25), (w + 0.3, h + 0.3, 0.3), 'Pad_SteelDark')
+            te.cyl((-w / 2 - 0.2, y, hz + 0.4), (w / 2 + 0.2, y, hz + 0.4), 0.09, 'Pad_Steel', seg=6)
     # top platform + lightning rod
     te.box((0, TE_H + 0.2, 0), (5.6, 0.4, 3.2), 'Pad_TE')
     if lod == 0:
         te.cyl((0, TE_H + 0.4, 0), (0, TE_H + 5.0, 0), 0.08, 'Pad_Steel', seg=6)
-        # cable/plumbing runs up the vehicle-side face
-        for x in (-1.0, 0.0, 1.0):
-            te.cyl((x, 0.5, hz + 0.45), (x, 60, hz + 0.45), 0.12, 'Pad_Pipe', seg=6, caps=False)
+        rail_run(te, [(-2.8, TE_H + 0.4, -1.6), (2.8, TE_H + 0.4, -1.6), (2.8, TE_H + 0.4, 1.6), (-2.8, TE_H + 0.4, 1.6), (-2.8, TE_H + 0.4, -1.6)], lod)
+        # risers up the vehicle-side face: insulated LOX line, RP-1, pneumatics, cable tray
+        zf = hz + 0.5
+        te.cyl((-0.9, 0.5, zf), (-0.9, 46, zf), 0.2, 'Pad_White', seg=10, caps=False)
+        te.cyl((-0.35, 0.5, zf), (-0.35, 42, zf), 0.13, 'Pad_Pipe', seg=8, caps=False)
+        te.cyl((0.1, 0.5, zf), (0.1, 61, zf), 0.07, 'Pad_Pipe', seg=6, caps=False)
+        te.cyl((0.3, 0.5, zf), (0.3, 61, zf), 0.07, 'Pad_Pipe', seg=6, caps=False)
+        te.box((1.0, 31, zf - 0.05), (0.7, 61, 0.12), 'Pad_Steel')
+        te.box((1.0, 31, zf + 0.05), (0.55, 61, 0.12), 'Pad_Cable')
+        for k in range(1, 30):   # pipe clamps / stand-offs
+            yy = k * 2.1
+            te.box((0.2, yy, hz + 0.3), (2.6, 0.12, 0.35), 'Pad_SteelDark')
+        # caged ladder on the back face (rails + cage hoops; rungs read in the grime texture)
+        zl = -hz - 0.55
+        for dx in (-0.23, 0.23):
+            te.box((dx, TE_H / 2, zl), (0.06, TE_H - 1, 0.06), 'Pad_Yellow')
+        for k in range(2, int(TE_H / 1.8)):
+            yy = k * 1.8
+            ring = [Vector((0.38 * math.cos(a), yy, zl - 0.2 + 0.38 * math.sin(a) * -1)) for a in
+                    [math.pi * j / 4 for j in range(5)]]
+            te.tube(ring, 0.025, 'Pad_Yellow', seg=3, caps=False)
+        for sx in (-1, 1):
+            te.cyl((sx * 0.35, 3.6, zl - 0.2), (sx * 0.35, TE_H - 0.5, zl - 0.2), 0.02, 'Pad_Yellow', seg=3, caps=False)
     return te
 
 
 def transporter_erector(mb, lod):
     M = Matrix.Rotation(TE_LEAN, 3, Vector((1, 0, 0)))
     mb.merge(strongback(lod), xf=(M, TE_PIVOT))
-    # pivot supports on the pad
+    # pivot supports on the pad (built-up pedestals with a through pin)
     for sx in (-1, 1):
-        mb.box((sx * 2.3, TE_PIVOT.y / 2, TE_PIVOT.z), (1.0, TE_PIVOT.y, 1.6), 'Pad_SteelDark')
+        mb.box((sx * 2.3, TE_PIVOT.y / 2 - 0.3, TE_PIVOT.z), (1.0, TE_PIVOT.y - 0.6, 1.6), 'Pad_SteelDark')
+        if lod == 0:
+            mb.box((sx * 2.3, 0.2, TE_PIVOT.z), (1.8, 0.4, 2.4), 'Pad_Concrete', uv_scale=1 / 8)
+            for dx in (-0.62, 0.62):
+                mb.box((sx * 2.3 + dx, TE_PIVOT.y - 0.3, TE_PIVOT.z), (0.12, 1.4, 1.3), 'Pad_SteelDark')
+            mb.cyl((sx * 2.3 - 0.8, TE_PIVOT.y, TE_PIVOT.z), (sx * 2.3 + 0.8, TE_PIVOT.y, TE_PIVOT.z), 0.22, 'Pad_Steel', seg=10)
     # carriage on the rails (x = +-5) behind the pivot
     z0, z1 = -8.8, -24.0
     zc, zl = (z0 + z1) / 2, z0 - z1
@@ -423,6 +683,33 @@ def prop_farm(mb, lod):
 
 
 # ================================================================================ build
+# tiling detail maps (grime / weathering, grating) need world-scale UVs on the steel: per face,
+# project on the plane of the dominant normal axis (side faces: u horizontal, v = height)
+BOX_UV = {'Pad_Steel': 1 / 4, 'Pad_SteelDark': 1 / 4, 'Pad_SteelSoot': 1 / 4, 'Pad_TE': 1 / 4, 'Pad_Pipe': 1 / 4,
+          'Pad_White': 1 / 4, 'Pad_Yellow': 1 / 4, 'Pad_Tower': 1 / 4, 'Pad_TowerRed': 1 / 4, 'Pad_Grating': 1.0}
+
+
+def box_uvs(mb):
+    for fi, f in enumerate(mb.f):
+        sc = BOX_UV.get(mb.mats[mb.mi[fi]])
+        if sc is None:
+            continue
+        P = [mb.v[k] for k in f]
+        nx = ny = nz = 0.0
+        for a, b in zip(P, P[1:] + P[:1]):   # Newell normal
+            nx += (a[1] - b[1]) * (a[2] + b[2])
+            ny += (a[2] - b[2]) * (a[0] + b[0])
+            nz += (a[0] - b[0]) * (a[1] + b[1])
+        ax, ay, az = abs(nx), abs(ny), abs(nz)
+        if ay >= ax and ay >= az:
+            uv = [(p[0] * sc, p[2] * sc) for p in P]
+        elif ax >= az:
+            uv = [(p[2] * sc, p[1] * sc) for p in P]
+        else:
+            uv = [(p[0] * sc, p[1] * sc) for p in P]
+        mb.uv[fi] = uv
+
+
 def build(lod):
     root = empty(f'PAD_L{lod}')
     mb = MB()
@@ -434,6 +721,7 @@ def build(lod):
     hangar(mb, lod)
     water_tower(mb, lod)
     prop_farm(mb, lod)
+    box_uvs(mb)
     mb.build(f'PAD_L{lod}_mesh', parent=root, smooth=35)
     print(f'PAD_L{lod}', len(mb.f), 'faces')
     return root

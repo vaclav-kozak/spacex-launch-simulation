@@ -6,6 +6,11 @@ pad_apron_albedo.jpg                2048^2 unique map of the 160 x 160 m apron a
                                     exhaust scorch around the flame-duct opening and the trench exit
                                     (azimuth 200 deg, 42 m), deluge water stains, rail beds, markings.
 pad_ground_albedo.jpg               512^2 tileable gravel, 1 tile = 4 m.
+pad_grime_albedo/rough.jpg          1024^2 tileable weathering for painted steel (multiplies the material
+                                    colour), 1 tile = 4 m (box-projected UVs, v = height): vertical rain /
+                                    run-off streaks, soot and salt-air blotches, rust spots and bleed.
+pad_grating_albedo.jpg              512^2 tileable galvanised bar grating, 1 tile = 1 m (30 mm bearing-bar
+                                    pitch, 100 mm cross bars), dark see-through gaps.
 """
 import math
 import numpy as np
@@ -111,4 +116,45 @@ gr = lerp(gr, rgb('#a59a86'), tint[..., None] * 0.4)
 dry = smoothstep(0.3, 1.2, g3)
 gr = lerp(gr, rgb('#7a7560'), dry[..., None] * 0.3)
 save_srgb(gr, 'pad_ground_albedo.jpg', 84)
+
+# ------------------------------------------------------------------ steel weathering (4 m tile)
+W = 1024
+streak = fnoise(W, W, 70, 2.2, seed=31)             # long vertical run-off streaks
+streak2 = fnoise(W, W, 160, 5, seed=32)
+blot = fbm(W, W, 90, 90, 4, seed=33)                 # large soot / dirt blotches
+fine = fnoise(W, W, 1.0, 1.0, seed=34)
+mid = fbm(W, W, 12, 12, 3, seed=35)
+dirt = np.clip(0.55 * smoothstep(0.2, 2.2, streak) + 0.35 * smoothstep(0.0, 2.0, streak2)
+               + 0.45 * smoothstep(0.1, 1.6, blot), 0, 1)
+g = np.zeros((W, W, 3), np.float32) + 1.0
+g *= (1 - 0.06 * fine[..., None] * 0.5 - 0.05 * mid[..., None])
+g = lerp(g, rgb('#6f6a62'), dirt[..., None] * 0.55)
+# rust: sparse spots with short bleed streaks underneath
+spots = smoothstep(2.3, 3.0, fnoise(W, W, 3.0, 3.0, seed=36))
+bleed = np.clip(gauss(spots, 22, 1.5) * 9, 0, 1)
+rust = np.clip(spots + 0.6 * bleed * smoothstep(-0.5, 1.0, streak), 0, 1)
+g = lerp(g, rgb('#7a4a2c'), rust[..., None] * 0.6)
+g = np.clip(g, 0, 1)
+save_srgb(g, 'pad_grime_albedo.jpg', 86)
+rgh = np.clip(0.8 + 0.25 * dirt + 0.2 * rust + 0.04 * mid, 0, 1)
+save_raw(np.stack([np.ones_like(rgh), rgh, np.ones_like(rgh)], -1), 'pad_grime_rough.jpg', 84)
+
+# ------------------------------------------------------------------ bar grating (1 m tile)
+Gt = 512
+yy, xx = np.mgrid[0:Gt, 0:Gt].astype(np.float32) + 0.5
+u, v = xx / Gt, yy / Gt
+bb = np.abs(((u / (1 / 32)) % 1.0) - 0.5) * (1 / 32)       # bearing bars: 32 per metre, 5 mm thick
+cb = np.abs(((v / (1 / 10)) % 1.0) - 0.5) * (1 / 10)       # cross bars: 10 per metre, twisted 6 mm
+# bars are 30-40 mm deep: at the grazing angles the pad cameras see, they hide most of the gap, so the
+# map uses a wider apparent bar than the 5 mm plan-view one
+bar = smoothstep(0.0078, 0.0092, bb)      # distance from gap centre -> bar
+cross = smoothstep(0.05 - 0.009, 0.05 - 0.007, cb)
+solid = np.clip(bar + cross, 0, 1)
+gn = fbm(Gt, Gt, 40, 40, 3, seed=41)
+gal = np.zeros((Gt, Gt, 3), np.float32) + rgb('#b9bab5')
+gal *= (1 + 0.08 * gn)[..., None]
+gal = lerp(gal, rgb('#6b6254'), smoothstep(0.4, 1.8, fbm(Gt, Gt, 60, 60, 3, seed=42))[..., None] * 0.5)
+gap = rgb('#22211e')
+img = lerp(gap + np.zeros_like(gal), gal, solid[..., None])
+save_srgb(img, 'pad_grating_albedo.jpg', 88)
 print('done')

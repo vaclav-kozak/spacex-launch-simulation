@@ -7,7 +7,8 @@
 * `LAUNCH_MOUNT_HEIGHT = 4.0` (re-exported from `src/render/vehicles/rig.ts`): the nozzle exit stands 4 m above
   the pad surface at `PAD_ELEVATION`, which matches the sim's pre-launch `S1.pos.y = PAD_ELEVATION + 4`.
 * Settings: `sootyBooster` and `timeOfDay` are followed via `SETTINGS_CHANGED`. Soot swaps albedo/ORM textures,
-  and night/twilight turns on the pad floodlights (2 SpotLights, night only) and the ship's deck floods.
+  and night/twilight turns on the pad floodlights (2 SpotLights: night 1.6e4, twilight 0.15 of that, per
+  look-dev) and the ship's deck floods.
 * LOD: 3 levels per body from projected size × `lodBias(ctx.quality.level)` = [2.0, 1.3, 1.0, 0.7].
   Bodies under ~0.3 px are hidden. The payload is drawn only once a fairing has opened.
 
@@ -19,8 +20,19 @@
 * **Grid fins:** deploy rotates each fin 90° about the same hinge-type axis. `gridFins.angles[i]` is the twist in
   radians about the fin's outward radial axis (right-hand rule). 0 = the fin plane contains the body axis.
 * **MVac:** gimbal is `rotation.set(gimbalX, 0, gimbalZ, 'ZXY')` about the pivot at y 3.95. The niobium
-  extension's glow is a function of sim time, so it is seek-safe. It heats with τ = 11 s after `engines[0].ignitionT`
-  (emissive up to ~20) and cools with τ = 22 s after the SECO marker.
+  extension's glow is a pure function of sim time (seek-safe). `secondStage.ts` computes the hottest-band
+  temperature. During the burn it approaches the steady state with τ 7 s after `engines[0].ignitionT`: dull red after ~6 s,
+  orange by ~15 s, full by ~30 s. The steady state is ~1480 K × throttle^0.25. After the SECO marker it cools as a
+  radiating sheet, T = (T0^-3 + 3aT)^(-1/3): ~1000 K after 12 s and below visible after ~30 s.
+  `materials.setMvacTemperature` maps T to a HalfFloat blackbody ramp along the bell (v 0 = regen joint, hottest
+  → v 1 = exit, dull red / dark). Radiance = `GLOW_PEAK · (L/Lref)^GLOW_GAMMA` with GLOW_PEAK 0.35 and gamma 0.8.
+  **This replaces the old "emissive 4..20" contract.** With sun = 6 (sunlit white ≈ 1.5), a physical 1480 K niobium
+  surface is ~0.3–0.4 units. Values of 4–20 sit above the auto-exposure's metered percentile window, so the bell
+  blew out through AgX into a white/peach ball. The extension material is matte charcoal (roughness 0.72); the
+  glossier R512E setting read as a lilac mirror after SECO.
+* **S1 heating:** grid fins never glow (their tips never reach visible temperatures). Engine bells and the
+  octaweb get a dull-red glow only during and just after the entry burn, driven from the burn in
+  `VehicleVisuals.ts` (`s1Glow`) and not from dynamic pressure.
 * **Fairing halves:** A is on +X and B on −X of the S2 frame. The parafoil canopy is ~45 m above the half along
   the local vertical. It inflates with `parafoil` 0..1 and its lines run to the half's nose.
 * **Starlink stack:** 22 instanced sats. Deploy drift is deterministic (hash per sat): radial 1–4 cm/s, axial
@@ -37,17 +49,37 @@ Pad frame = W shifted to (0, PAD_ELEVATION, 0).
   `vfx/emitters.ts` `TRENCH_EXIT`. A gravel berm covers the last 17 m of the duct. The mouth is at grade
   (0–2.9 m), not 9 m deep. VFX's 9 m impingement plane is fine because anything below 0 is hidden, but fire
   and smoke should leave the mouth at y ≈ 0–3 m.
-* **Launch mount:** a steel frame of 4 columns at (±4.6, ±4.6) with beams on the W/N/E sides; the south is open.
-  The octagonal table (r 2.05–3.4) is at y 4.8–5.25 with 4 hold-down clamps at 45/135/225/315°.
+* **Launch mount (detailed 2026-09-27, `blender/build_slc4e.py`):**
+  * Frame: four built-up I-columns on footings with base plates, bolts and gussets at (±4.6, ±4.6). Stiffened
+    I-girders sit on the W/N/E sides with X-bracing on those faces. The **south stays open** for the engine cam.
+  * Table and deck: the table ring (r 2.05–3.4, y 4.8–5.25, sooted `Pad_SteelSoot`) is fed by I-beam cross beams.
+    Grating walkways (`Pad_Grating`, y 4.73) with yellow handrails run on three sides, with a stair down the west side.
+  * Hold-down clamps (45/135/225/315°): base block, jaw, cheek plates with pivot pin, hydraulic cylinder and
+    rod, accumulator and hose.
+  * Deluge: a sooted spray header (r 3.0, y 4.42) with 12 nozzles and risers, plus the ground deluge ring (r 10).
+  * Services: the T-0 umbilical box (panel doors, QD plate). A cable tray and a pipe rack run on stands from the
+    TE base (z −26) to the box: LOX (white, insulated), RP-1, GN2 and He.
+* **Weathering:** steel, TE, pipe, white, yellow and tower materials use box-projected world UVs (4 m tiles,
+  written by `box_uvs()` in the builder) with the tiling `pad_grime_albedo/rough.jpg`: rain streaks, soot
+  blotches and rust bleed. Grating uses `pad_grating_albedo.jpg` (1 m tiles). Generator: `blender/tex/gen_pad_textures.py`.
+* **Budget:** PAD_L0 has 9.3k faces (mostly quads), L1 2.3k and L2 0.8k. GLB 271 KB. Measured GPU (RTX 5070 Ti, 1080p, q2,
+  scene pass incl. shadows): pad 0.19 ms at the pad cams, of which the new detail is +0.02–0.06 ms. Vehicles +
+  pad + ship together cost 0.07–0.24 ms. Scaled ×8–10 for a GTX 1650 that is ~0.6–0.9 ms for vehicles + pad +
+  ship on a normal shot, and up to ~2 ms on the pad close-ups at q2 (quality auto drops shadows there).
 * **TE:** the strongback is on the north side (pivot (0, 5.2, −7.4)), leaning back 3°, top ~71 m. Rails at
-  x ±5 run north to the hangar (z −130..−225).
+  x ±5 run north to the hangar (z −130..−225). L0 detail:
+  * Structure: built-up chords with 20 frames; K-braced wide faces, diagonals on the narrow faces, gusset plates.
+  * Access: service decks every 4 levels, a caged ladder on the back face, a top-platform rail and pivot
+    pedestals with pins.
+  * Arms: 4 retracted truss umbilical arms with hinge blocks, carrier plates and sagging hose bundles.
+  * Vehicle-face risers: insulated LOX, RP-1, pneumatics and a cable tray.
 * **Other structures:**
   * Lightning towers (88 m) at heading/distance 300°/30 m (next to the cameras' "tower" pad cam), 30°/48,
     120°/48 and 215°/48. Catenary wires join their tops.
   * Floodlight masts (38 m) at (−70, −60), (75, 40), (70, −65) and (−65, 55).
   * Water tower at 250°/150 m; propellant farm at 110°/105 m.
-* **Camera clearance:** the cameras' pad presets (wide 64°/380 m, tower 300°/26 m/58 m, engine 205°/17 m/1.4 m,
-  up 118°/7.8 m/1.1 m) were checked and none of them is blocked.
+* **Camera clearance:** the cameras' pad presets were checked and none of them is blocked: wide 64°/380 m,
+  tower 300°/26 m/58 m, engine 205°/17 m/1.4 m, and up, which now stands on the east walkway at 100°/4.4 m/5.3 m.
 * **Apron:** 160 × 160 m of concrete at +0.08 m with a baked unique scorch/stain map. Roads and slabs sit at
   +0.06 m on top of env's flattened terrain (60 m within r 320 m).
 
@@ -57,6 +89,15 @@ Pad frame = W shifted to (0, PAD_ELEVATION, 0).
   `materials.setEnvMap(env)` is available if a probe should be pinned; otherwise `scene.environment` is used.
 
 ## Requests / known gaps
+* **Look-dev:**
+  * Pink booster at twilight (~75 km): not material-related. S1 albedo and ORM are neutral; the tint comes from
+    the sky / aerial light.
+  * After SECO the S2 engine cam meters the dark, unlit bell to mid-grey (exposure ~×27), so it reads as a
+    pale lilac ball. The director now leaves the engine cam 13 s after SECO. A fixed-ish exposure for
+    `onboard_engine` would be more faithful (real engine cams keep the bell dark once the glow fades).
+  * The MVac glow reads peachier whenever the frame holds little Earth, because the meter lifts it.
+* **VFX:** the MVac plume haze is drawn over the lower bell in the engine cam (the bell should occlude its
+  own inner plume).
 * **Sim (seen 2026-09-27):** in a real run at `?seek=505` S1 was still `stacked` / ASCENT at 308 km, so the
   deck cam showed an empty deck. Landing visuals were verified with `camfake=1`.
 * **VFX:** consider moving the pad impingement plane from −9 m to the pad surface under the mount, or keep it.

@@ -25,6 +25,11 @@ import { lodBias, pickLod, projectedPx } from './lod';
 
 export { LAUNCH_MOUNT_HEIGHT } from './rig';
 
+const smooth = (a: number, b: number, x: number) => {
+  const k = Math.max(0, Math.min(1, (x - a) / (b - a)));
+  return k * k * (3 - 2 * k);
+};
+
 const BODY_SIZE: Record<BodyId, number> = {
   S1: F9.s1.length,
   S2: F9.s2.length,
@@ -45,6 +50,11 @@ export class VehicleVisuals implements FrameModule {
   padVisual: PadVisual | null = null;
   private rig: F9Rig = DEFAULT_RIG;
   private lineMat = new THREE.LineBasicMaterial({ color: new THREE.Color(0.35, 0.35, 0.34), transparent: true, opacity: 0.7 });
+  /** mission times of the booster entry burn (from sim events, also emitted while seeking) */
+  private entryT0 = NaN;
+  private entryT1 = NaN;
+  private baseHeat = 0;
+  private lastT = NaN;
 
   constructor(private ctx: AppContext) {
     setMaxAnisotropy(ctx.renderer);
@@ -96,6 +106,10 @@ export class VehicleVisuals implements FrameModule {
       if (o.layers.mask === 0) o.layers.set(LAYER_DEFAULT);
     });
     this.materials.setSooty(ctx.settings.sootyBooster);
+    ctx.events.on('*', (e) => {
+      if (e.type === 'ENTRY_BURN_START') { this.entryT0 = e.t; this.entryT1 = NaN; }
+      else if (e.type === 'ENTRY_BURN_END') this.entryT1 = e.t;
+    });
     ctx.events.on('SETTINGS_CHANGED', (e) => {
       if (!e.data || e.data.key === 'sootyBooster') this.materials.setSooty(this.ctx.settings.sootyBooster);
       if (!e.data || e.data.key === 'timeOfDay') this.padVisual?.setTimeOfDay(this.ctx.settings.timeOfDay);
@@ -134,13 +148,15 @@ export class VehicleVisuals implements FrameModule {
     const b = snap.bodies;
     if (this.s1 && b.S1) {
       this.s1.update(b.S1);
-      this.materials.setS1Heating(b.S1.heating);
+      this.materials.setS1Heating(this.s1Glow(snap));
     }
-    if (this.s2 && b.S2) this.materials.setMvacGlow(this.s2.update(b.S2, snap));
+    if (this.s2 && b.S2) this.materials.setMvacTemperature(this.s2.update(b.S2, snap));
     if (this.fairings.length) {
       this.fairings[0].update(b.FAIRING_A);
       this.fairings[1].update(b.FAIRING_B);
-      this.materials.setFairingHeating(Math.max(b.FAIRING_A.heating, b.FAIRING_B.heating));
+      // only a free half re-entering hypersonically may show a faint dull glow (never on ascent)
+      const fg = (f: typeof b.FAIRING_A) => (f.status === 'free' ? smooth(0.3, 0.7, f.heating) * smooth(5.5, 7.5, f.mach) : 0);
+      this.materials.setFairingHeating(Math.max(fg(b.FAIRING_A), fg(b.FAIRING_B)));
     }
     if (this.payload && b.PAYLOAD) {
       this.payload.update(b.PAYLOAD, snap);
@@ -150,6 +166,35 @@ export class VehicleVisuals implements FrameModule {
     }
     this.shipVisual?.update(snap);
     this.padVisual?.update(snap);
+  }
+
+  /**
+   * Booster base glow 0..1. The sim's `heating` is a heat-flux proxy (sqrt(rho) V^3) that stays ~0.75
+   * down to 10 km, where the recovery temperature (~600 K at Mach 3) cannot make metal glow. Visible
+   * glow comes from the entry burn (plume recirculation onto the octaweb): tau 3.5 s up while burning,
+   * 7 s decay after cutoff, plus a small hypersonic (Mach > 5) stagnation term. Seek-safe (event times).
+   */
+  private s1Glow(snap: SimSnapshot): number {
+    const s1 = snap.bodies.S1;
+    const t = snap.t;
+    const dt = Number.isFinite(this.lastT) ? t - this.lastT : 0;
+    this.lastT = t;
+    const mk = snap.timeline.find((m) => m.type === 'ENTRY_BURN_START' && m.done);
+    if (mk) this.entryT0 = mk.t;
+    if (this.entryT0 > t + 0.05) { this.entryT0 = NaN; this.entryT1 = NaN; } // seek backwards
+    if (this.entryT1 > t + 0.05 || this.entryT1 < this.entryT0) this.entryT1 = NaN;
+    let entry = 0;
+    if (s1.status === 'free' && t >= this.entryT0) {
+      const burning = s1.phase === 'ENTRY_BURN';
+      const end = Number.isFinite(this.entryT1) ? this.entryT1 : burning ? t : NaN;
+      if (Number.isFinite(end)) {
+        const on = 1 - Math.exp(-(Math.min(t, end) - this.entryT0) / 3.5);
+        entry = t > end ? on * Math.exp(-(t - end) / 7) : on;
+      } else entry = this.baseHeat * Math.exp(-Math.max(0, dt) / 7);
+    }
+    this.baseHeat = entry;
+    const aero = s1.status === 'free' ? smooth(0.55, 0.95, s1.heating) * smooth(5, 7, s1.mach) * 0.6 : 0;
+    return Math.max(entry, aero);
   }
 
   beforeViewRender(view: ViewInfo, snap: SimSnapshot): void {

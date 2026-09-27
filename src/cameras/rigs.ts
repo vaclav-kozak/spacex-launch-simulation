@@ -27,6 +27,9 @@ export interface RigInput {
 }
 
 const S1_FULL_THRUST = 9 * MERLIN_1D.thrustSL;
+const CHASE_FOV_MAX = 48;
+/** hard cap on the chase camera's distance from the body centre (m) */
+const CHASE_MAX_DIST = 250;
 
 /** shake angular amplitude (rad at view.shake = 1) and frequency (Hz) per mode */
 export const SHAKE_PROFILE: Record<CameraMode, { amp: number; freq: number }> = {
@@ -43,6 +46,7 @@ export const SHAKE_PROFILE: Record<CameraMode, { amp: number; freq: number }> = 
 const _v1 = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
 const _v3 = new THREE.Vector3();
+const _v4 = new THREE.Vector3();
 const _q1 = new THREE.Quaternion();
 const _q2 = new THREE.Quaternion();
 const Y = new THREE.Vector3(0, 1, 0);
@@ -76,6 +80,9 @@ export class ChaseRig extends Rig {
   private acc = new THREE.Vector3();
   private fov = 40;
   private fovVel = { v: 0 };
+  /** dolly-out factor when the framing would need a wider lens than FOV_MAX (close, plume-heavy phases) */
+  private pull = 1;
+  private pullVel = { v: 0 };
   private orbitAz = 0;
   private f = new THREE.Vector3();
   private side = new THREE.Vector3();
@@ -99,6 +106,11 @@ export class ChaseRig extends Rig {
     const plume = plumeLength(snap, focus);
     const R = Math.max(L, plume * 0.3); // framing radius grows with the plume at altitude
     let back = 1.6, sideD = 0.9, upD = -0.2, lead = 0.1, smooth = 1.1, orbitMode = false;
+    /** share of the constraining frame dimension the body (+ visible plume) should fill */
+    let fill = 0.82;
+    /** offsets relative to the HORIZONTAL travel direction instead of the velocity (descent phases:
+     * the velocity points at the ground, so "behind" would put the camera straight overhead) */
+    let level = false;
     const phase = focus === 'S1' ? b.phase : undefined;
     const tSep = inp.evT('STAGE_SEP');
     if (focus === 'S1' && isStacked(snap)) {
@@ -109,15 +121,17 @@ export class ChaseRig extends Rig {
       const since = tSep !== undefined ? snap.t - tSep : 999;
       if (b.status !== 'free') orbitMode = true;
       else if (phase === 'FLIP' || (phase === 'COAST' && since < 45)) {
-        back = 0.25; sideD = 2.3; upD = 0.45; smooth = 1.8; lead = 0; // broadside: see the flip + RCS
+        back = 0.25; sideD = 2.3; upD = 0.45; smooth = 1.8; lead = 0; fill = 0.66; // broadside: see the flip + RCS
       } else if (phase === 'COAST' || phase === 'ASCENT') {
-        back = 1.4; sideD = 1.3; upD = 0.5; smooth = 2;
+        back = 1.4; sideD = 1.3; upD = 0.5; smooth = 2; fill = 0.7;
       } else if (phase === 'ENTRY_BURN') {
-        back = 1.9; sideD = 1.1; upD = 0.1; smooth = 1.3;
+        // three-quarter from above the horizon: engines, the plume punching into the flow, the glow
+        level = true; back = 0.55; sideD = 1.45; upD = 0.45; smooth = 1.3; fill = 0.82;
       } else if (phase === 'AERO') {
-        back = 1.6; sideD = 0.75; upD = 0.15;
+        // side-on, level with the booster: the horizon runs behind it, ocean below, fins steering
+        level = true; back = 0.45; sideD = 1.5; upD = 0.12; smooth = 1.2; lead = 0.06; fill = 0.8;
       } else if (phase === 'LANDING_BURN') {
-        back = 1.35; sideD = 0.95; upD = 0.1; smooth = 0.9;
+        level = true; back = 0.4; sideD = 1.35; upD = 0.05; smooth = 0.9; lead = 0.04; fill = 0.8;
       } else if (phase === 'LANDED' || phase === 'LOST') orbitMode = true;
     } else if (focus === 'S2') {
       back = 2.3; sideD = 0.9; upD = 0.35;
@@ -140,7 +154,11 @@ export class ChaseRig extends Rig {
         .addScaledVector(enu.up, -L * 0.2);
       smooth = 2.5;
     } else {
-      target.copy(f).multiplyScalar(-back * R).addScaledVector(side, sideD * R).addScaledVector(up, upD * R);
+      const fb = level ? _v1.crossVectors(up, side).normalize() : f; // horizontal travel direction
+      target.copy(fb).multiplyScalar(-back * R).addScaledVector(side, sideD * R).addScaledVector(up, upD * R);
+      target.multiplyScalar(this.pull);
+      // a chase is a chase: never more than CHASE_MAX_DIST out (anything farther is a long-lens shot)
+      if (target.lengthSq() > CHASE_MAX_DIST * CHASE_MAX_DIST) target.setLength(CHASE_MAX_DIST);
       // acceleration lag: camera trails when the vehicle accelerates (engine start, staging)
       if (dtSim > 1e-4 && !this.fresh) {
         _v1.copy(b.vel).sub(this.prevVel).multiplyScalar(1 / dtSim);
@@ -166,9 +184,28 @@ export class ChaseRig extends Rig {
     const aim = _v3.copy(fr.center).add(this.look);
     this.aimAt(view, aim);
 
-    const dist = view.camWorldPos.distanceTo(fr.center);
-    const extent = L * 1.15 + (orbitMode ? 0 : Math.min(plume, 2 * L) * 0.3);
-    const fovT = clamp((2 * Math.atan(extent / 2 / Math.max(1, dist)) / RAD) * 1.05, 18, 50);
+    // fit the body's PROJECTED extent (+ a share of the visible plume) into the 16:9 frame: a booster
+    // seen along its axis or lying across the wide frame dimension needs a much tighter lens than
+    // its raw length suggests
+    // (both ends measured from the aim point, which leads / leans toward the plume)
+    const d = _v1.copy(aim).sub(view.camWorldPos).normalize();
+    const right = _v2.crossVectors(d, upAt(view.camWorldPos, _v3)).normalize();
+    const camUp = _v3.crossVectors(right, d);
+    const rad = Math.min(L, 4.5) * 0.5;
+    const aspect = Math.max(1, inp.aspect);
+    let tanNeed = 0.05;
+    for (let k = 0; k < 2; k++) {
+      const s = k === 0 ? L * 0.5 : -(L * 0.5 + (orbitMode ? 0 : Math.min(plume, 2 * L) * (focus === 'S2' ? 0.05 : 0.12)));
+      const e = _v4.copy(fr.center).addScaledVector(fr.axis, s).sub(view.camWorldPos);
+      const depth = Math.max(1, e.dot(d));
+      tanNeed = Math.max(tanNeed, (Math.abs(e.dot(camUp)) + rad) / depth,
+        (Math.abs(e.dot(right)) + rad) / depth / aspect);
+    }
+    const tanFit = tanNeed / (orbitMode ? 0.7 : fill);
+    const fovT = clamp((2 * Math.atan(tanFit) / RAD), 14, CHASE_FOV_MAX);
+    // lens alone can't hold the frame: dolly out (smoothly) instead of letting the body clip
+    const pullT = orbitMode ? 1 : clamp((this.pull * tanFit) / Math.tan((CHASE_FOV_MAX * 0.5 - 1) * RAD), 1, 3);
+    this.pull = this.fresh ? pullT : smoothDampScalar(this.pull, this.pullVel, pullT, 1.0, dtSim);
     this.fov = this.fresh ? fovT : smoothDampScalar(this.fov, this.fovVel, fovT, 1.2, dtSim);
     view.camera.fov = this.fov;
 
@@ -183,10 +220,25 @@ export class ChaseRig extends Rig {
 // ---------------------------------------------------------------------------------------------
 // ONBOARD cams: rigidly attached to the body.
 
+/** S2 engine camera pod on the aft skirt rim (S2 body frame: origin = MVac exit, skirt rim at y 3.9, r 1.83;
+ * the pod stands ~12 cm proud of the skirt, like the real one). Dev override: ?s2cam=angle,r,y,tilt,roll,fov. Earthward
+ * is body angle ~90 deg during the burn (sim roll), so 115 deg shows the limb tilted across the frame. */
+const S2_ENGINE_CAM = { angleDeg: 115, radius: 1.95, y: 3.85, tiltDeg: 28, rollDeg: 0, fov: 64 };
+function devEngineCam(): Partial<typeof S2_ENGINE_CAM> {
+  if (typeof location === 'undefined') return {};
+  const v = new URLSearchParams(location.search).get('s2cam');
+  if (!v) return {};
+  const [angleDeg, radius, y, tiltDeg, rollDeg, fov] = v.split(',').map(Number);
+  const o: Partial<typeof S2_ENGINE_CAM> = { angleDeg, radius, y, tiltDeg, rollDeg, fov };
+  for (const k of Object.keys(o) as (keyof typeof o)[]) if (!Number.isFinite(o[k])) delete o[k];
+  return o;
+}
+
 export class OnboardRig extends Rig {
   readonly mode: 'onboard_down' | 'onboard_engine';
   private localPos = new THREE.Vector3();
   private localQuat = new THREE.Quaternion();
+  private fov = 68;
   constructor(mode: 'onboard_down' | 'onboard_engine') {
     super();
     this.mode = mode;
@@ -199,14 +251,19 @@ export class OnboardRig extends Rig {
       const fwd = new THREE.Vector3(0, -1, 0).addScaledVector(radial, 0.13).normalize();
       lookQuat(fwd, tang.negate(), this.localQuat);
     } else {
-      const c = F9.s2.cams.engine;
+      // S2 engine cam: on a bracket just under the aft-skirt rim, looking aft along the stage and in
+      // toward the MVac so the bell hangs from the top of the frame, glowing, with the Earth beyond.
+      const c = { ...S2_ENGINE_CAM, ...devEngineCam() };
       const a = c.angleDeg * RAD;
       const radial = new THREE.Vector3(Math.cos(a), 0, Math.sin(a));
+      const inward = radial.clone().negate();
       this.localPos.copy(radial).multiplyScalar(c.radius).setY(c.y);
-      // look down at the MVac bell, slightly inward so the nozzle sits low-center, Earth beyond
-      const aim = new THREE.Vector3().copy(radial).multiplyScalar(0.35).setY(0.2);
-      const fwd = aim.sub(this.localPos).normalize();
-      lookQuat(fwd, radial, this.localQuat);
+      const t = c.tiltDeg * RAD;
+      const fwd = new THREE.Vector3(0, -Math.cos(t), 0).addScaledVector(inward, Math.sin(t));
+      const up = new THREE.Vector3(0, Math.sin(t), 0).addScaledVector(inward, Math.cos(t));
+      lookQuat(fwd, up, this.localQuat);
+      if (c.rollDeg) this.localQuat.multiply(_q1.setFromAxisAngle(_v1.set(0, 0, 1), c.rollDeg * RAD));
+      this.fov = c.fov;
     }
   }
 
@@ -216,7 +273,12 @@ export class OnboardRig extends Rig {
     const b = snap.bodies[bodyId];
     view.camWorldPos.copy(this.localPos).applyQuaternion(b.quat).add(b.pos);
     view.camera.quaternion.copy(b.quat).multiply(this.localQuat);
-    view.camera.fov = this.mode === 'onboard_down' ? 68 : 74;
+    // fixed lens: `fov` is the vertical fov in a 16:9 frame; narrower tiles (split view) keep that
+    // horizontal coverage (hor+, capped) so the MVac bell doesn't fill a half-width tile
+    const aspect = Math.max(0.3, inp.aspect || 16 / 9);
+    const vFov = aspect >= 16 / 9 ? this.fov
+      : Math.min(92, 2 * Math.atan(Math.tan(this.fov * 0.5 * RAD) * (16 / 9) / aspect) / RAD);
+    view.camera.fov = vFov;
     const q = b.dynPressure / 30_000;
     if (this.mode === 'onboard_down') {
       const s1 = snap.bodies.S1;
@@ -245,7 +307,9 @@ let _siteNear: THREE.Vector3 | null = null;
 let _siteGround: THREE.Vector3 | null = null;
 
 export function sitePosition(site: SiteId, snap: SimSnapshot, out: THREE.Vector3): THREE.Vector3 {
-  if (site === 'near') return out.copy(_siteNear ??= pointAlongAzimuth(1900, 32, PAD_ELEVATION + 8));
+  // perimeter camera on the ridge SE of the pad (terrain ~213 m there; the old 1.9 km / 32 deg site
+  // sat behind a rise and saw only hillside). Sun behind the operator in the morning.
+  if (site === 'near') return out.copy(_siteNear ??= pointAlongAzimuth(900, 150, 233));
   if (site === 'ground') return out.copy(_siteGround ??= pointAlongAzimuth(7800, 62, 330));
   // support ship: ~3.2 km off OCISLY (east / slightly south), camera 14 m above the water
   const ship = snap.bodies.SHIP.pos;
@@ -320,8 +384,13 @@ export class LongLensRig extends Rig {
     const err = this.dir.angleTo(dT);
     if (err > maxErr) this.dir.lerp(dT, 1 - maxErr / err).normalize();
 
-    const extent = fr.size * 1.15 + Math.min(plume, fr.size * 4) * 0.3;
-    const fill = 0.42;
+    // fit the PROJECTED length: a booster falling toward the tracker is heavily foreshortened, and
+    // framing its raw length left a speck in the middle of the sky
+    // (the high-altitude plume is as wide as it is long, so it sets a floor when seen end-on)
+    const sinA = Math.sqrt(Math.max(0, 1 - fr.axis.dot(dT) ** 2));
+    const extent = Math.max(8 + plume * 0.6, (fr.size * 1.15 + Math.min(plume, fr.size * 4) * 0.3) * Math.max(0.25, sinA));
+    // a big expanding plume reads as a shape only with sky around it (else a flat wall of plume)
+    const fill = lerp(0.42, 0.24, smoothstep(1, 3.5, plume / Math.max(1, fr.size)));
     const fovT = clamp((2 * Math.atan(extent / fill / 2 / Math.max(1, dist))) / RAD, 0.12, 32);
     this.fov = this.fresh ? fovT : Math.exp(lerp(Math.log(this.fov), Math.log(fovT), expK(dtSim, 0.9)));
     view.camera.fov = this.fov;
@@ -382,10 +451,13 @@ export class DeckRig extends Rig {
     // zoom: wide when close, tighter when the booster is still far out
     const fovT = gone ? 84 : clamp((2 * Math.atan((fr.size * 3.2) / 2 / Math.max(1, dist))) / RAD, 7, 84);
     this.fov = this.fresh ? fovT : Math.exp(lerp(Math.log(this.fov), Math.log(fovT), expK(dtSim, 0.6)));
-    // PTZ: keep the deck framed but never let the booster leave the frame
+    // PTZ: zoomed in on the incoming booster it stays centred; as the lens opens up the operator
+    // lets it drift toward the frame edge to get the deck in, but never lets any part of it leave
     const aimT = _v3.copy(def);
     if (!gone) {
-      const lim = this.fov * RAD * 0.42;
+      const halfV = this.fov * RAD * 0.5;
+      const bAng = Math.atan((fr.size * 0.5) / Math.max(1, dist));
+      const lim = Math.max(0, halfV * 0.88 - bAng * 1.05) * smoothstep(22, 62, this.fov);
       const ang = def.angleTo(bLocal);
       if (ang > lim) {
         _q1.setFromUnitVectors(def, bLocal);
@@ -417,6 +489,19 @@ export class DeckRig extends Rig {
 // PAD: fixed remote cameras around SLC-4E.
 
 type PadPreset = 'wide' | 'tower' | 'engine' | 'up';
+/** "launch mount" camera: on the mount's east walkway grating, ~0.5 m above the deck and ~2.6 m from
+ * the booster skin, looking up the side of the vehicle (the old spot under the SE girder corner framed
+ * mostly the girder). Aim = point on the vehicle axis at aimY. Dev override: ?padup=heading,dist,h,aimY,fov,aimOff */
+const PAD_UP = { hdg: 100, dist: 4.4, h: 5.3, aimY: 40, fov: 70, aimOff: -1.5 };
+function devPadUp(): typeof PAD_UP {
+  const o = { ...PAD_UP };
+  if (typeof location === 'undefined') return o;
+  const v = new URLSearchParams(location.search).get('padup');
+  if (!v) return o;
+  const keys = Object.keys(PAD_UP) as (keyof typeof PAD_UP)[];
+  v.split(',').map(Number).forEach((x, i) => { if (Number.isFinite(x) && keys[i]) o[keys[i]] = x; });
+  return o;
+}
 const PAD_LABEL: Record<PadPreset, string> = { wide: 'WIDE', tower: 'TOWER', engine: 'ENGINE CAM', up: 'LAUNCH MOUNT' };
 
 export class PadRig extends Rig {
@@ -466,10 +551,14 @@ export class PadRig extends Rig {
       this.dir.copy(this.fixedDir);
       fovT = 44;
     } else {
-      at(118, 7.8, 1.1);
-      if (this.fresh) this.fixedDir.set(base.x, base.y + 62, base.z).sub(view.camWorldPos).normalize();
+      const c = devPadUp();
+      at(c.hdg, c.dist, c.h);
+      if (this.fresh) {
+        const a = (c.hdg + 90) * RAD;   // aimOff: sideways along the tangent (m)
+        this.fixedDir.set(base.x + Math.sin(a) * c.aimOff, base.y + c.aimY, base.z - Math.cos(a) * c.aimOff).sub(view.camWorldPos).normalize();
+      }
       this.dir.copy(this.fixedDir);
-      fovT = 76;
+      fovT = c.fov;
     }
     this.fov = this.fresh ? fovT : Math.exp(lerp(Math.log(this.fov), Math.log(fovT), expK(dtSim, 0.7)));
     view.camera.fov = this.fov;

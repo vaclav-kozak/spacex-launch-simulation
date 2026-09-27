@@ -3,10 +3,15 @@ import { clamp, easeInOutCubic, lerp } from './util';
 
 export interface Rect { x: number; y: number; w: number; h: number }
 
-/** bottom band reserved for the HUD (T-clock, gauges, timeline arc) */
+/** bottom band reserved for the HUD (T-clock, gauges, timeline arc), in UI design px (x uiZoom) */
 export const HUD_BAND = 250;
-/** PiPs keep clear of the HUD's gauges (which extend a little above the band) */
-const PIP_BOTTOM_CLEAR = 270;
+/** PiPs keep clear of the HUD's gauges (which extend a little above the band), design px */
+const PIP_BOTTOM_CLEAR = 272;
+
+/** the webcast overlay's --z scale (mirror of src/ui/HUD.ts layout(): design size 1600 x 900) */
+export function uiZoom(W: number, H: number): number {
+  return clamp(Math.min(W / 1600, H / 900), 0.74, 1.5);
+}
 const GAP = 2;
 
 /** Tile rects for n views (order = priority / reading order). */
@@ -37,14 +42,15 @@ export function tileRects(n: number, W: number, H: number): Rect[] {
   return out;
 }
 
-/** Picture-in-picture thumbnails: bottom-left, stacked upward from just above the HUD band
- * (top-right belongs to the UI control panel, top-left to the main view's label). */
+/** Picture-in-picture thumbnails: bottom-left, stacked upward from just above the HUD band (scaled
+ * by the overlay's --z, so they never cover the telemetry / captions band; the captions shift right
+ * of them). Top-right belongs to the UI control panel, top-left to the main view's label. */
 export function pipRects(n: number, W: number, H: number): Rect[] {
   const w = clamp(W * 0.2, 180, 380);
   const h = (w * 9) / 16;
   const m = 20;
   const out: Rect[] = [];
-  const bottom = H - PIP_BOTTOM_CLEAR;
+  const bottom = H - PIP_BOTTOM_CLEAR * uiZoom(W, H);
   for (let i = 0; i < n; i++) {
     const y = bottom - (i + 1) * h - i * 10;
     out.push({ x: m, y: Math.max(m + 90, y), w, h });

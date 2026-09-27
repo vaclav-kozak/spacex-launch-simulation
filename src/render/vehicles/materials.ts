@@ -15,24 +15,122 @@ export interface MatSet {
   [name: string]: THREE.MeshStandardMaterial;
 }
 
-/** 1D vertical ramp used as the MVac emissive map (v = 0 at the extension top, 1 at the exit). */
-function mvacGlowRamp(): THREE.DataTexture {
-  const h = 64;
-  const d = new Uint8Array(h * 4);
-  for (let i = 0; i < h; i++) {
-    const v = i / (h - 1);
-    // hottest just below the regen joint, radiating fin cools toward the exit; slight exit-lip rise
-    const k = Math.pow(1 - v, 0.9) * 0.85 + 0.15 * Math.exp(-((v - 0.03) ** 2) / 0.002);
-    const g = Math.max(0.12, Math.min(1, k + 0.08));
-    d.set([Math.round(255 * g), Math.round(255 * g), Math.round(255 * g), 255], i * 4);
+// ------------------------------------------------------------------------------------------------
+// Blackbody glow (MVac niobium extension). Planck spectrum x CIE 1931 (Wyman 2013 multi-lobe fit),
+// tabulated 500..2000 K: relative luminance and linear-sRGB chromaticity (max channel = 1).
+
+const BB_T0 = 500, BB_DT = 10, BB_N = 151;
+const bbLum = new Float32Array(BB_N);
+const bbRGB = new Float32Array(BB_N * 3);
+(function buildBlackbodyLut() {
+  const g = (x: number, mu: number, s1: number, s2: number) => Math.exp(-0.5 * ((x - mu) / (x < mu ? s1 : s2)) ** 2);
+  const xb = (l: number) => 1.056 * g(l, 599.8, 37.9, 31.0) + 0.362 * g(l, 442.0, 16.0, 26.7) - 0.065 * g(l, 501.1, 20.4, 26.2);
+  const yb = (l: number) => 0.821 * g(l, 568.8, 46.9, 40.5) + 0.286 * g(l, 530.9, 16.3, 31.1);
+  const zb = (l: number) => 1.217 * g(l, 437.0, 11.8, 36.0) + 0.681 * g(l, 459.0, 26.0, 13.8);
+  const c2 = 1.4388e7; // h c / k in nm K
+  for (let i = 0; i < BB_N; i++) {
+    const T = BB_T0 + i * BB_DT;
+    let X = 0, Y = 0, Z = 0;
+    for (let l = 380; l <= 780; l += 5) {
+      const b = 1 / (l ** 5 * (Math.exp(c2 / (l * T)) - 1));
+      X += b * xb(l); Y += b * yb(l); Z += b * zb(l);
+    }
+    const r = 3.2406 * X - 1.5372 * Y - 0.4986 * Z;
+    const gg = -0.9689 * X + 1.8758 * Y + 0.0415 * Z;
+    const bl = 0.0557 * X - 0.204 * Y + 1.057 * Z;
+    const m = Math.max(r, gg, bl, 1e-30);
+    bbLum[i] = Y;
+    bbRGB[i * 3] = Math.max(0, r / m);
+    bbRGB[i * 3 + 1] = Math.max(0, gg / m);
+    bbRGB[i * 3 + 2] = Math.max(0, bl / m);
   }
-  const t = new THREE.DataTexture(d, 1, h, THREE.RGBAFormat);
-  t.colorSpace = THREE.NoColorSpace;
-  t.magFilter = THREE.LinearFilter;
-  t.minFilter = THREE.LinearFilter;
-  t.wrapS = THREE.RepeatWrapping;
-  t.needsUpdate = true;
-  return t;
+})();
+
+/** Blackbody at T (K): writes linear-sRGB chromaticity (max 1) to `out`, returns luminance (arbitrary units). */
+export function blackbody(T: number, out: THREE.Color): number {
+  const x = Math.max(0, Math.min(BB_N - 1.001, (T - BB_T0) / BB_DT));
+  const i = Math.floor(x), f = x - i;
+  const j = i + 1;
+  out.setRGB(
+    bbRGB[i * 3] * (1 - f) + bbRGB[j * 3] * f,
+    bbRGB[i * 3 + 1] * (1 - f) + bbRGB[j * 3 + 1] * f,
+    bbRGB[i * 3 + 2] * (1 - f) + bbRGB[j * 3 + 2] * f,
+  );
+  // luminance is ~exponential in T: interpolate in log space
+  return Math.exp(Math.log(bbLum[i] + 1e-300) * (1 - f) + Math.log(bbLum[j] + 1e-300) * f);
+}
+
+/** MVac extension thermal profile (v = 0 at the regen joint, 1 at the exit rim). */
+export const MVAC_T = {
+  /** ambient / cold soak (K) */
+  amb: 290,
+  /** steady-state temperature of the hottest band at full thrust (K) */
+  hot: 1480,
+  /** steady-state profile along the bell (K) */
+  ss(v: number): number {
+    // hottest ~8 cm below the joint (the manifold flange sinks heat), radiating fin cools to ~950 K at the lip
+    return (1480 - 530 * Math.pow(v, 1.1)) * (1 - 0.09 * Math.exp(-v / 0.03));
+  },
+};
+
+const GLOW_N = 128;
+/** reference luminance (hot band at steady state) and display mapping */
+const GLOW_PEAK = 0.35; // emissive radiance of the hottest band (lighting units; see models.md: 4..20 blows out through AgX)
+const GLOW_GAMMA = 0.8; // camera response: silicon + log encoding compress the Wien slope
+
+/** Dynamic 1 x 128 HDR emissive ramp for the MVac extension (half float, linear). */
+class MvacGlowRamp {
+  readonly tex: THREE.DataTexture;
+  private data = new Uint16Array(GLOW_N * 4);
+  private prof = new Float32Array(GLOW_N);
+  private lumRef: number;
+  private last = -1;
+  private c = new THREE.Color();
+
+  constructor() {
+    const hot = MVAC_T.hot, amb = MVAC_T.amb;
+    let mx = 0;
+    for (let i = 0; i < GLOW_N; i++) mx = Math.max(mx, MVAC_T.ss((i + 0.5) / GLOW_N));
+    for (let i = 0; i < GLOW_N; i++) this.prof[i] = (MVAC_T.ss((i + 0.5) / GLOW_N) - amb) / (mx - amb);
+    this.lumRef = blackbody(hot, this.c);
+    this.tex = new THREE.DataTexture(this.data, 1, GLOW_N, THREE.RGBAFormat, THREE.HalfFloatType);
+    this.tex.colorSpace = THREE.NoColorSpace;
+    this.tex.magFilter = THREE.LinearFilter;
+    this.tex.minFilter = THREE.LinearFilter;
+    this.tex.wrapS = THREE.ClampToEdgeWrapping;
+    this.tex.wrapT = THREE.ClampToEdgeWrapping;
+    this.tex.generateMipmaps = false;
+    this.set(amb);
+  }
+
+  /** hottest-band temperature (K); the rest of the bell follows the steady-state profile shape */
+  set(Thot: number): void {
+    if (Math.abs(Thot - this.last) < 0.5) return;
+    this.last = Thot;
+    const amb = MVAC_T.amb;
+    const toH = THREE.DataUtils.toHalfFloat;
+    for (let i = 0; i < GLOW_N; i++) {
+      const T = amb + (Thot - amb) * this.prof[i];
+      let I = 0;
+      if (T > 700) {
+        const L = blackbody(T, this.c) / this.lumRef;
+        // fade the last (invisible) few hundred K smoothly to black
+        const k = Math.min(1, (T - 700) / 180);
+        I = GLOW_PEAK * Math.pow(L, GLOW_GAMMA) * k * k;
+        // consumer camera: IR-leaky red channel + white balance push dull red toward orange
+        this.c.g = Math.min(1, this.c.g * 1.55 + 0.012);
+        this.c.b = Math.min(1, this.c.b * 1.3 + 0.002);
+      }
+      const o = i * 4;
+      this.data[o] = toH(this.c.r * I);
+      this.data[o + 1] = toH(this.c.g * I);
+      this.data[o + 2] = toH(this.c.b * I);
+      this.data[o + 3] = toH(1);
+    }
+    this.tex.needsUpdate = true;
+  }
+
+  get hotT(): number { return this.last; }
 }
 
 /** Radial falloff for the octaweb heat-shield glow (planar UV over the 3.66 m disc). */
@@ -108,7 +206,9 @@ export class VehicleMaterials {
   readonly m: MatSet = {};
   private sooty = -1;
   private envMap: THREE.Texture | null = null;
-  readonly heatColor = new THREE.Color(1.0, 0.33, 0.08);
+  /** dull orange-red of ~1100-1200 K steel/Inconel seen by a camera (S1 base heating) */
+  readonly heatColor = new THREE.Color(1.0, 0.24, 0.045);
+  private mvacRamp = new MvacGlowRamp();
 
   // texture sets for the soot swap
   private t = {
@@ -173,13 +273,16 @@ export class VehicleMaterials {
     });
     std('S2_Inner', { color: lin(0x303030), roughness: 0.8, side: THREE.DoubleSide });
     std('S2_Dome', { color: lin(0x9a9a98), roughness: 0.4, metalness: 0.7, roughnessMap: rough2 });
+    // niobium C-103 with a dark silicide coating; the emissive map is the live blackbody ramp
     std('MVac_Ext', {
-      color: lin(0x1c1c1f), roughness: 0.42, metalness: 0.55, roughnessMap: rough2,
-      emissive: new THREE.Color(1, 0.2, 0.04), emissiveIntensity: 0, emissiveMap: mvacGlowRamp(),
+      // matte charcoal (the R512E coating is not a mirror: at grazing angles to the sunlit Earth a
+      // glossier setting read as a pale lilac bell after SECO)
+      color: lin(0x232326), roughness: 0.72, metalness: 0.35, roughnessMap: rough2,
+      emissive: new THREE.Color(1, 1, 1), emissiveIntensity: 0, emissiveMap: this.mvacRamp.tex,
     });
     std('MVac_ExtInner', {
       color: lin(0x141414), roughness: 0.6, metalness: 0.3,
-      emissive: new THREE.Color(1, 0.2, 0.04), emissiveIntensity: 0, emissiveMap: this.m['MVac_Ext'].emissiveMap,
+      emissive: new THREE.Color(1, 1, 1), emissiveIntensity: 0, emissiveMap: this.mvacRamp.tex,
     });
     std('MVac_Regen', { color: lin(0x6b4a33), roughness: 0.38, metalness: 1.0, roughnessMap: rough2 });
     std('MVac_Parts', { color: lin(0x505050), roughness: 0.45, metalness: 0.85 });
@@ -259,31 +362,36 @@ export class VehicleMaterials {
     }
   }
 
-  /** S1 aerothermal glow (0..1): octaweb + blankets strongest, bells and fins weaker. */
-  setS1Heating(h: number): void {
-    const x = Math.max(0, Math.min(1, h));
+  /**
+   * S1 base heating glow (0..1, already thresholded by the caller: entry-burn plume recirculation +
+   * hypersonic stagnation only). Octaweb heat shield + blankets strongest, bells faint, grid fins never
+   * (titanium at Mach 3 stays well below the ~800 K Draper point).
+   */
+  setS1Heating(g: number): void {
+    const x = Math.max(0, Math.min(1, g));
     const k = x * x;
-    this.m['S1_HeatShield'].emissiveIntensity = 6 * k;
-    this.m['S1_Blanket'].emissiveIntensity = 3.5 * k;
-    this.m['M1D_Bell'].emissiveIntensity = 1.6 * k;
-    this.m['GridFin'].emissiveIntensity = 0.8 * k;
+    this.m['S1_HeatShield'].emissiveIntensity = 2.4 * k;
+    this.m['S1_Blanket'].emissiveIntensity = 1.1 * k;
+    this.m['M1D_Bell'].emissiveIntensity = 0.35 * k * x;
+    this.m['GridFin'].emissiveIntensity = 0;
   }
 
-  setFairingHeating(h: number): void {
-    this.m['Fairing'].emissiveIntensity = 0.6 * Math.max(0, Math.min(1, h)) ** 2;
+  /** Fairing glow 0..1 (caller gates it to hypersonic re-entry; a faint dull red at most). */
+  setFairingHeating(g: number): void {
+    this.m['Fairing'].emissiveIntensity = 0.12 * Math.max(0, Math.min(1, g)) ** 2;
   }
 
-  /** MVac nozzle-extension glow, heat01 0..1 (radiative equilibrium ≈ 1). */
+  /** MVac nozzle-extension glow from the temperature (K) of its hottest band. */
+  setMvacTemperature(Thot: number): void {
+    this.mvacRamp.set(Thot);
+    const on = Thot > 700 ? 1 : 0;
+    this.m['MVac_Ext'].emissiveIntensity = on;
+    this.m['MVac_ExtInner'].emissiveIntensity = on;
+  }
+
+  /** Legacy 0..1 heat fraction (viewer): 0 = cold, 1 = steady-state full thrust. */
   setMvacGlow(heat01: number): void {
     const h = Math.max(0, Math.min(1, heat01));
-    // dull cherry red -> orange-red as the niobium approaches ~1300 K, radiance ∝ T^4-ish
-    const e = this.m['MVac_Ext'];
-    const ei = this.m['MVac_ExtInner'];
-    const r = 1, g = 0.1 + 0.26 * h, b = 0.02 + 0.06 * h;
-    e.emissive.setRGB(r, g, b);
-    ei.emissive.setRGB(r, g * 1.1, b * 1.1);
-    const I = h < 0.02 ? 0 : 20 * Math.pow(h, 2.4) + 0.6 * h;
-    e.emissiveIntensity = I;
-    ei.emissiveIntensity = I * 1.15;
+    this.setMvacTemperature(MVAC_T.amb + (MVAC_T.hot - MVAC_T.amb) * h);
   }
 }

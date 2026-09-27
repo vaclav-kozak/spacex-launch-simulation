@@ -12,7 +12,7 @@ import { IGNITION_TIME } from '../core/constants';
 import { directorShot, MAJOR_EVENTS, type StoryKey } from './director';
 import { makeRig, OrbitRig, SHAKE_PROFILE, type Rig, type RigInput } from './rigs';
 import { Overlay, type ModeButton } from './overlay';
-import { collapsedRect, HUD_BAND, pipRects, RectTween, ScalarTween, tileRects, type Rect } from './layout';
+import { collapsedRect, HUD_BAND, pipRects, RectTween, ScalarTween, tileRects, uiZoom, type Rect } from './layout';
 import { applyShake, bodyFraming, clamp, fmtInt, isStacked, RAD } from './util';
 import { installFakeSim } from './fakeSim';
 import { displaySpeed } from '../core/frames';
@@ -703,7 +703,7 @@ export class ViewportManager {
       const f = view.focus ?? 'S1';
       const b = snap.bodies[f];
       const altKm = Math.max(0, b.altitude) / 1000;
-      const bottomLimited = view.rect.y + 120 > H - HUD_BAND;
+      const bottomLimited = view.rect.y + 120 > H - HUD_BAND * uiZoom(this.W, H);
       el.update({
         name: view.label,
         speed: fmtInt(displaySpeed(b) * 3.6),
