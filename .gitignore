@@ -7,3 +7,4 @@ tools/audio/.venv
 __pycache__/
 *.blend1
 .cache/
+.claude/scheduled_tasks.lock
