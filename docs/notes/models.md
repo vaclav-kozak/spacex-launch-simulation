@@ -30,6 +30,11 @@
   surface is ~0.3–0.4 units. Values of 4–20 sit above the auto-exposure's metered percentile window, so the bell
   blew out through AgX into a white/peach ball. The extension material is matte charcoal (roughness 0.72); the
   glossier R512E setting read as a lilac mirror after SECO.
+  Surface maps `mvac_ext_albedo.jpg`/`mvac_ext_rough.jpg` (`blender/tex/gen_mvac_textures.py`) carry only vertical
+  streaks. `fixExtensionUVs` rewrites v (height) but keeps the lathe's around-the-bell u. The old constant u = 0.5
+  sampled a single column of a 2D noise roughness map, so roughness varied with height only and the sunlit bell
+  showed horizontal rings. The albedo is a bright multiplier (mean ~0.8) with the tone set in `color`, because an
+  absolute charcoal map spans only ~6 8-bit levels and its gradients would quantise into bands.
 * **S1 heating:** grid fins never glow (their tips never reach visible temperatures). Engine bells and the
   octaweb get a dull-red glow only during and just after the entry burn, driven from the burn in
   `VehicleVisuals.ts` (`s1Glow`) and not from dynamic pressure.

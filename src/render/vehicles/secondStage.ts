@@ -93,7 +93,7 @@ export class SecondStageVisual {
 /**
  * The glow ramp is indexed by v = 0 at the regen joint .. 1 at the exit. The GLB's lathe strips use an
  * arc-length v and the exit-lip ring has planar UVs; re-derive v from height for every extension mesh
- * so the lip samples the (coolest) exit end.
+ * so the lip samples the (coolest) exit end. u stays the GLB's (around the bell) for the streak maps.
  */
 function fixExtensionUVs(mvac: THREE.Object3D): void {
   mvac.traverse((o) => {
@@ -103,19 +103,18 @@ function fixExtensionUVs(mvac: THREE.Object3D): void {
     if (!name.startsWith('MVac_Ext')) return;
     const g = m.geometry as THREE.BufferGeometry;
     const pos = g.getAttribute('position');
-    let uv = g.getAttribute('uv') as THREE.BufferAttribute | undefined;
+    const uv = g.getAttribute('uv') as THREE.BufferAttribute | undefined;
     if (!pos) return;
-    if (!uv || uv.itemSize !== 2) {
-      uv = new THREE.BufferAttribute(new Float32Array(pos.count * 2), 2);
-      g.setAttribute('uv', uv);
-    }
+    const hasU = !!uv && uv.itemSize === 2;
     let y0 = Infinity, y1 = -Infinity;
     for (let i = 0; i < pos.count; i++) { const y = pos.getY(i); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
     // extension spans 0..MVAC_EXT_L (2.4 m) above the exit plane; the joint is the top of this mesh
     const span = Math.max(1e-3, y1 - y0);
     const out = new Float32Array(pos.count * 2);
     for (let i = 0; i < pos.count; i++) {
-      out[i * 2] = 0.5;
+      // keep the lathe's around-the-bell u (seam vertices are duplicated in the strip UVs) so the surface
+      // maps stay 2D; a constant u collapsed any 2D map into horizontal rings
+      out[i * 2] = hasU ? uv!.getX(i) : 0.5 + Math.atan2(pos.getZ(i), pos.getX(i)) / (2 * Math.PI);
       out[i * 2 + 1] = Math.max(0, Math.min(1, (y1 - pos.getY(i)) / span));
     }
     g.setAttribute('uv', new THREE.BufferAttribute(out, 2));

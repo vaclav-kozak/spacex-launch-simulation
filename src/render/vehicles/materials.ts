@@ -274,14 +274,20 @@ export class VehicleMaterials {
     std('S2_Inner', { color: lin(0x303030), roughness: 0.8, side: THREE.DoubleSide });
     std('S2_Dome', { color: lin(0x9a9a98), roughness: 0.4, metalness: 0.7, roughnessMap: rough2 });
     // niobium C-103 with a dark silicide coating; the emissive map is the live blackbody ramp
+    // Matte charcoal (the R512E coating is not a mirror: at grazing angles to the sunlit Earth a
+    // glossier setting read as a pale lilac bell after SECO). Surface maps are laid out u = around the
+    // bell, v = joint..exit (secondStage.ts fixExtensionUVs): vertical streaks only. The albedo map is a
+    // bright ~0.8 multiplier so 8-bit steps stay invisible; the absolute tone lives in `color`.
+    // (Round 3: the old tiling noise roughnessMap was sampled along one u column, so its roughness
+    // varied with height only and the sunlit bell showed horizontal specular rings.)
+    const extAlb = tex('mvac_ext_albedo.jpg', { srgb: true });
+    const extRough = tex('mvac_ext_rough.jpg');
     std('MVac_Ext', {
-      // matte charcoal (the R512E coating is not a mirror: at grazing angles to the sunlit Earth a
-      // glossier setting read as a pale lilac bell after SECO)
-      color: lin(0x232326), roughness: 0.72, metalness: 0.35, roughnessMap: rough2,
+      map: extAlb, color: lin(0x232326).multiplyScalar(1.25), roughness: 1, metalness: 0.35, roughnessMap: extRough,
       emissive: new THREE.Color(1, 1, 1), emissiveIntensity: 0, emissiveMap: this.mvacRamp.tex,
     });
     std('MVac_ExtInner', {
-      color: lin(0x141414), roughness: 0.6, metalness: 0.3,
+      map: extAlb, color: lin(0x161616).multiplyScalar(1.25), roughness: 0.85, metalness: 0.3, roughnessMap: extRough,
       emissive: new THREE.Color(1, 1, 1), emissiveIntensity: 0, emissiveMap: this.mvacRamp.tex,
     });
     std('MVac_Regen', { color: lin(0x6b4a33), roughness: 0.38, metalness: 1.0, roughnessMap: rough2 });
