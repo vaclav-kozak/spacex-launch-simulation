@@ -1,5 +1,7 @@
 // High-frequency ocean detail: two Tessendorf FFT cascades (N=256, L≈61 m and ≈7.3 m) on the GPU
-// (Stockham radix-2 in fragment shaders, both cascades side by side in one 512×256 float target).
+// (Stockham radix-2 in fragment shaders, both cascades side by side in one 2N×N float target).
+// Low quality uses N=128 (4x fewer texels; cascade 1 loses the < ~13 cm capillaries, whose slope
+// variance goes into the surface roughness instead).
 // The spectrum is high-pass filtered below the shortest core/waves.ts Gerstner wavelength so the
 // low-frequency surface stays exactly the shared Gerstner sum the ship rides on.
 // Outputs per cascade: displacement (dx, dy, dz, jacobian) and slope moments (sx, sz, sx², sz²)
@@ -30,12 +32,13 @@ function mulberry(seed: number) {
 
 const SPECTRUM_FRAG = /* glsl */ `
 precision highp float;
-uniform sampler2D uH0;      // (h0(k).re, h0(k).im, conj h0(-k).re, conj h0(-k).im) per texel, 512x256
+uniform sampler2D uH0;      // (h0(k).re, h0(k).im, conj h0(-k).re, conj h0(-k).im) per texel, 2N x N
 uniform float uTime;
 in vec2 vUv;
 layout(location = 0) out vec4 outA;
 layout(location = 1) out vec4 outB;
-const float N = ${FFT_N}.0;
+uniform float uN;
+#define N uN
 uniform vec2 uL; // cascade sizes
 vec2 cmul(vec2 a, vec2 b) { return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x); }
 void main() {
@@ -81,7 +84,8 @@ uniform float uHorizontal;
 in vec2 vUv;
 layout(location = 0) out vec4 outA;
 layout(location = 1) out vec4 outB;
-const float N = ${FFT_N}.0;
+uniform float uN;
+#define N uN
 vec2 cmul(vec2 a, vec2 b) { return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x); }
 void main() {
   vec2 px = floor(vUv * vec2(2.0 * N, N));
@@ -115,7 +119,8 @@ layout(location = 0) out vec4 outD0;
 layout(location = 1) out vec4 outS0;
 layout(location = 2) out vec4 outD1;
 layout(location = 3) out vec4 outS1;
-const float N = ${FFT_N}.0;
+uniform float uN;
+#define N uN
 vec4 disp(vec2 uv, out vec4 slopes) {
   vec4 a = texture(uA, uv), b = texture(uB, uv);
   // a = (Dy, Dx, Dz, Sx), b = (Sz, Dxx, Dzz, Dxz)
@@ -145,27 +150,65 @@ void main() {
 `;
 
 export class OceanFFT {
-  private h0Tex: THREE.DataTexture;
-  private pingA = makeRT(FFT_N * 2, FFT_N, { type: THREE.FloatType, count: 2, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter } as Partial<THREE.RenderTargetOptions>);
-  private pingB = makeRT(FFT_N * 2, FFT_N, { type: THREE.FloatType, count: 2, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter } as Partial<THREE.RenderTargetOptions>);
-  private outRT: THREE.WebGLRenderTarget[];
+  private h0Tex!: THREE.DataTexture;
+  private pingA!: THREE.WebGLRenderTarget;
+  private pingB!: THREE.WebGLRenderTarget;
+  private outRT: THREE.WebGLRenderTarget[] = [];
   private cur = 0;
   private specPass: FullscreenPass;
   private fftPass: FullscreenPass;
   private finalPass: FullscreenPass;
   private key = '';
+  private conds: [WaveSet, number, number] | null = null;
+  private uN = { value: FFT_N };
+  /** grid size (256 at quality >= 2; 128 at low quality: 4x fewer texels, same bands except the
+   * shortest capillaries of cascade 1, whose slope variance is returned in `lostSlopeVar`) */
+  n = FFT_N;
+  /** mean-square slope of the cascade-1 band dropped by a smaller grid (add to the roughness) */
+  lostSlopeVar = 0;
   /** displacement (dx,dy,dz,foam) and slope textures per cascade — stable texture objects */
   disp: THREE.Texture[] = [];
   slope: THREE.Texture[] = [];
   /** choppiness */
   chop = 1.0;
 
-  constructor(maxAniso = 8) {
-    this.h0Tex = new THREE.DataTexture(new Float32Array(FFT_N * 2 * FFT_N * 4), FFT_N * 2, FFT_N, THREE.RGBAFormat, THREE.FloatType);
+  constructor(private maxAniso = 8, n = FFT_N) {
+    const N = this.uN;
+    this.specPass = new FullscreenPass(passMaterial(SPECTRUM_FRAG, { uH0: { value: null }, uTime: { value: 0 }, uL: { value: new THREE.Vector2(CASCADE_L[0], CASCADE_L[1]) }, uN: N }));
+    this.fftPass = new FullscreenPass(passMaterial(FFT_FRAG, { uA: { value: null }, uB: { value: null }, uSub: { value: 2 }, uHorizontal: { value: 1 }, uN: N }));
+    this.finalPass = new FullscreenPass(
+      passMaterial(FINAL_FRAG, {
+        uA: { value: null }, uB: { value: null }, uFoamPrev0: { value: null }, uFoamPrev1: { value: null },
+        uChop: { value: 1 }, uFoamDecay: { value: 0.985 }, uFoamThresh: { value: 0.3 }, uN: N,
+      }),
+    );
+    this.alloc(n);
+  }
+
+  /** (re)allocate the grid; rebuilds the spectrum for the last conditions */
+  setSize(n: number): void {
+    if (n === this.n && this.h0Tex) return;
+    this.alloc(n);
+    if (this.conds) this.setConditions(...this.conds);
+  }
+
+  private alloc(n: number): void {
+    this.h0Tex?.dispose();
+    this.pingA?.dispose();
+    this.pingB?.dispose();
+    for (const rt of this.outRT) rt.dispose();
+    this.n = n;
+    this.uN.value = n;
+    this.key = '';
+    this.h0Tex = new THREE.DataTexture(new Float32Array(n * 2 * n * 4), n * 2, n, THREE.RGBAFormat, THREE.FloatType);
     this.h0Tex.minFilter = this.h0Tex.magFilter = THREE.NearestFilter;
     this.h0Tex.needsUpdate = true;
+    this.specPass.material.uniforms.uH0.value = this.h0Tex;
+    const ping = () => makeRT(n * 2, n, { type: THREE.FloatType, count: 2, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter } as Partial<THREE.RenderTargetOptions>);
+    this.pingA = ping();
+    this.pingB = ping();
     const mk = () => {
-      const rt = makeRT(FFT_N, FFT_N, {
+      const rt = makeRT(n, n, {
         count: 4,
         wrapS: THREE.RepeatWrapping,
         wrapT: THREE.RepeatWrapping,
@@ -176,20 +219,13 @@ export class OceanFFT {
       for (const t of rt.textures) {
         t.generateMipmaps = true;
         t.minFilter = THREE.LinearMipmapLinearFilter;
-        t.anisotropy = maxAniso;
+        t.anisotropy = this.maxAniso;
         t.wrapS = t.wrapT = THREE.RepeatWrapping;
       }
       return rt;
     };
     this.outRT = [mk(), mk()];
-    this.specPass = new FullscreenPass(passMaterial(SPECTRUM_FRAG, { uH0: { value: this.h0Tex }, uTime: { value: 0 }, uL: { value: new THREE.Vector2(CASCADE_L[0], CASCADE_L[1]) } }));
-    this.fftPass = new FullscreenPass(passMaterial(FFT_FRAG, { uA: { value: null }, uB: { value: null }, uSub: { value: 2 }, uHorizontal: { value: 1 } }));
-    this.finalPass = new FullscreenPass(
-      passMaterial(FINAL_FRAG, {
-        uA: { value: null }, uB: { value: null }, uFoamPrev0: { value: null }, uFoamPrev1: { value: null },
-        uChop: { value: 1 }, uFoamDecay: { value: 0.985 }, uFoamThresh: { value: 0.3 },
-      }),
-    );
+    this.cur = 0;
     // expose textures of the "current" output; we render into outRT[cur] and point uniforms at it
     this.disp = [this.outRT[0].textures[0], this.outRT[0].textures[2]];
     this.slope = [this.outRT[0].textures[1], this.outRT[0].textures[3]];
@@ -197,6 +233,8 @@ export class OceanFFT {
 
   /** (re)build the initial spectrum for the sea state / wind; kmin = cutoff below the Gerstner band */
   setConditions(set: WaveSet, windSpeed: number, windFromDeg: number): void {
+    this.conds = [set, windSpeed, windFromDeg];
+    const N = this.n;
     const minGerstner = Math.min(...set.waves.map((w) => w.wavelength));
     const key = `${set.seaState.toFixed(2)}|${windSpeed.toFixed(1)}|${windFromDeg.toFixed(0)}`;
     if (key === this.key) return;
@@ -210,40 +248,66 @@ export class OceanFFT {
     const kCut = (2 * Math.PI) / (minGerstner * 0.9);
     const A = 3.2e-3; // Phillips constant (tuned)
     const rnd = mulberry(4242);
+    const kSplit = (2 * Math.PI) / 3.2;
+    const kCap = (2 * Math.PI) / 0.06;
+    // band limits per cascade so they don't double count: c0 covers k < kSplit, c1 above; a grid
+    // smaller than 256 also stops cascade 1 below its Nyquist limit
+    const band = (c: number, n: number): [number, number] => [
+      c === 0 ? kCut : kSplit,
+      c === 0 ? kSplit : n >= FFT_N ? kCap : Math.min(kCap, (0.9 * Math.PI * n) / CASCADE_L[1]),
+    ];
+    const phil = (kx: number, kz: number, kLo: number, kHi: number) => {
+      const k = Math.hypot(kx, kz);
+      if (k < 1e-6) return 0;
+      const lo = smooth(kLo * 0.8, kLo * 1.1, k);
+      const hi = 1 - smooth(kHi * 0.9, kHi * 1.1, k);
+      if (lo * hi <= 0) return 0;
+      const cosw = (kx * wdx + kz * wdz) / k;
+      // directional spreading: cos^2 with a small upwind part
+      const dirf = cosw > 0 ? cosw * cosw : 0.07 * cosw * cosw;
+      const l = 0.0012 * Lw;
+      return (A * Math.exp(-1 / (k * Lw) ** 2) / k ** 4) * dirf * Math.exp(-(k * k) * l * l) * lo * hi;
+    };
+    // the random amplitudes are always drawn on the 256 grid (same stream), and a smaller grid keeps
+    // the modes it can hold, so a 128 grid shows exactly the same waves minus the shortest ripples
+    const F = FFT_N;
     for (let c = 0; c < 2; c++) {
       const L = CASCADE_L[c];
-      // band limits per cascade so they don't double count: c0 covers k < kSplit, c1 above
-      const kSplit = (2 * Math.PI) / 3.2;
-      const kLo = c === 0 ? kCut : kSplit;
-      const kHi = c === 0 ? kSplit : (2 * Math.PI) / 0.06;
-      const phil = (kx: number, kz: number) => {
-        const k = Math.hypot(kx, kz);
-        if (k < 1e-6) return 0;
-        const lo = smooth(kLo * 0.8, kLo * 1.1, k);
-        const hi = 1 - smooth(kHi * 0.9, kHi * 1.1, k);
-        if (lo * hi <= 0) return 0;
-        const cosw = (kx * wdx + kz * wdz) / k;
-        // directional spreading: cos^2 with a small upwind part
-        const dirf = cosw > 0 ? cosw * cosw : 0.07 * cosw * cosw;
-        const l = 0.0012 * Lw;
-        return (A * Math.exp(-1 / (k * Lw) ** 2) / k ** 4) * dirf * Math.exp(-(k * k) * l * l) * lo * hi;
-      };
+      const [kLo, kHi] = band(c, N);
       const dk = (2 * Math.PI) / L;
-      for (let y = 0; y < FFT_N; y++) {
-        for (let x = 0; x < FFT_N; x++) {
-          const mx = x < FFT_N / 2 ? x : x - FFT_N;
-          const my = y < FFT_N / 2 ? y : y - FFT_N;
-          const kx = mx * dk, kz = my * dk;
-          const p = Math.sqrt(phil(kx, kz) / 2) * dk;
-          const pm = Math.sqrt(phil(-kx, -kz) / 2) * dk;
+      for (let y = 0; y < F; y++) {
+        for (let x = 0; x < F; x++) {
+          const mx = x < F / 2 ? x : x - F;
+          const my = y < F / 2 ? y : y - F;
           const [g1, g2] = gauss(rnd);
           const [g3, g4] = gauss(rnd);
-          const i = (y * FFT_N * 2 + x + c * FFT_N) * 4;
+          if (mx < -N / 2 || mx >= N / 2 || my < -N / 2 || my >= N / 2) continue;
+          const kx = mx * dk, kz = my * dk;
+          const p = Math.sqrt(phil(kx, kz, kLo, kHi) / 2) * dk;
+          const pm = Math.sqrt(phil(-kx, -kz, kLo, kHi) / 2) * dk;
+          const i = ((my < 0 ? my + N : my) * N * 2 + (mx < 0 ? mx + N : mx) + c * N) * 4;
           data[i] = g1 * p; data[i + 1] = g2 * p;
           // conj(h0(-k))
           data[i + 2] = g3 * pm; data[i + 3] = -g4 * pm;
         }
       }
+    }
+    // slope variance (x + z) of the cascade-1 band a small grid drops, vs the full 256 grid
+    this.lostSlopeVar = 0;
+    if (N < FFT_N) {
+      const L = CASCADE_L[1], dk = (2 * Math.PI) / L;
+      const [lo, hiFull] = band(1, FFT_N);
+      const hiN = band(1, N)[1];
+      let v = 0;
+      for (let y = 0; y < FFT_N; y++)
+        for (let x = 0; x < FFT_N; x++) {
+          const kx = (x < FFT_N / 2 ? x : x - FFT_N) * dk, kz = (y < FFT_N / 2 ? y : y - FFT_N) * dk;
+          const k2 = kx * kx + kz * kz;
+          if (k2 < (hiN * 0.8) ** 2) continue;
+          const d = phil(kx, kz, lo, hiFull) - phil(kx, kz, lo, hiN) + phil(-kx, -kz, lo, hiFull) - phil(-kx, -kz, lo, hiN);
+          v += k2 * d * dk * dk * 0.8; // 0.8: matches the measured x+z slope variance drop of the packed IFFT
+        }
+      this.lostSlopeVar = v;
     }
     this.h0Tex.needsUpdate = true;
     this.chop = 0.9;
@@ -256,7 +320,7 @@ export class OceanFFT {
     let src = this.pingA, dst = this.pingB;
     const fu = this.fftPass.material.uniforms;
     for (const horiz of [1, 0]) {
-      for (let sub = 2; sub <= FFT_N; sub *= 2) {
+      for (let sub = 2; sub <= this.n; sub *= 2) {
         fu.uA.value = src.textures[0];
         fu.uB.value = src.textures[1];
         fu.uSub.value = sub;

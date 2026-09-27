@@ -52,6 +52,7 @@ uniform float uGridPx;
 uniform sampler2D uFFTDisp0;
 uniform vec4 uFFTOff;
 uniform vec2 uFFTInvL;
+uniform float uFFTTexel0;
 uniform float uWaveOn;
 varying vec3 vRel;
 varying vec2 vRest;
@@ -100,7 +101,7 @@ void main() {
     float ff = 1.0 - smoothstep(0.4, 1.5, fp);
     if (ff > 0.0) {
       vec2 uv0 = rel.xz * uFFTInvL.x + uFFTOff.xy;
-      disp += textureLod(uFFTDisp0, uv0, max(0.0, log2(fp / (${CASCADE_L[0]} / 256.0)))).xyz * ff;
+      disp += textureLod(uFFTDisp0, uv0, max(0.0, log2(fp / uFFTTexel0))).xyz * ff;
     }
   }
   vRest = rel.xz;
@@ -133,6 +134,7 @@ uniform sampler2D uFFTSlope0;
 uniform sampler2D uFFTSlope1;
 uniform vec4 uFFTOff;
 uniform vec2 uFFTInvL;
+uniform float uFFTLost;      // slope variance of FFT bands a low-quality grid drops
 uniform float uWaveOn;
 uniform float uCoxMunk;      // total mean-square slope of the sea (Cox-Munk)
 uniform float uFoamAmount;
@@ -260,15 +262,20 @@ void main() {
     // FFT detail (LEAN moments: mean slope + mean squared slope, mip-filtered)
     vec2 uv0 = rest * uFFTInvL.x + uFFTOff.xy;
     vec2 uv1 = rest * uFFTInvL.y + uFFTOff.zw;
-    vec4 s0 = texture(uFFTSlope0, uv0);
-    vec4 s1 = texture(uFFTSlope1, uv1);
     float fftFade = 1.0 - smoothstep(4000.0, 12000.0, dist);
-    s0 *= fftFade; s1 *= fftFade;
+    // gradients outside the (non-uniform) fade branch: implicit derivatives there are undefined
+    // (dark speckle along the 12 km fade line, i.e. the horizon seen from the deck)
+    vec2 uv0dx = dFdx(uv0), uv0dy = dFdy(uv0), uv1dx = dFdx(uv1), uv1dy = dFdy(uv1);
+    vec4 s0 = vec4(0.0), s1 = vec4(0.0);
+    if (fftFade > 0.0) {
+      s0 = textureGrad(uFFTSlope0, uv0, uv0dx, uv0dy) * fftFade;
+      s1 = textureGrad(uFFTSlope1, uv1, uv1dx, uv1dy) * fftFade;
+    }
     vec2 sm = s0.xy + s1.xy;
     float varF = max(0.0, s0.z - s0.x * s0.x) + max(0.0, s0.w - s0.y * s0.y) + max(0.0, s1.z - s1.x * s1.x) + max(0.0, s1.w - s1.y * s1.y);
     // anything not resolved by Gerstner+FFT: capillaries + (far away) the whole spectrum
     float resolved = varF + (1.0 - fftFade) * 0.0;
-    float a2 = max(0.0025, varR + varF * 1.0 + 0.004 + (1.0 - fftFade) * uCoxMunk);
+    float a2 = max(0.0025, varR + varF * 1.0 + 0.004 + uFFTLost * fftFade + (1.0 - fftFade) * uCoxMunk);
     a2 = min(a2, uCoxMunk * 1.6 + 0.01);
     vec3 nT = normalize(vec3(-(slope.x + sm.x), max(jy, 0.2), -(slope.y + sm.y)));
     vec3 N = normalize(ex * nT.x + up * nT.y + ez * nT.z);
@@ -293,23 +300,30 @@ void main() {
     water += Esun * vec3(0.004, 0.022, 0.020) * sss * max(mus + 0.1, 0.0);
     vec3 ocean = water + F * skyR + spec;
     // ---- foam: whitecaps (FFT jacobian foam + Gerstner crests), scaled by sea state / wind
-    vec4 d0 = texture(uFFTDisp0, uv0);
-    float foamN = fbm2(rest * 0.35 + vec2(uTime * 0.05, 0.0));
-    float cover = clamp(d0.w * fftFade * 1.2, 0.0, 1.0) * uFoamAmount;
-    cover += smoothstep(0.55, 0.9, crest) * uFoamAmount * 0.8;
-    float foam = clamp(cover * smoothstep(0.35, 0.75, foamN + cover * 0.4), 0.0, 1.0);
-    // ship wake / hull wash ring
-    if (uShipOn > 0.5) {
-      vec3 sp = rel - uShipRel;
-      vec2 lp = vec2(dot(sp, uShipX), dot(sp, uShipZ));
-      vec2 q = abs(lp) - vec2(15.5, 45.9);
-      float sd = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - 3.0;
-      float ring = exp(-max(sd, 0.0) / 7.0) * smoothstep(-2.0, 1.0, sd);
-      float streak = fbm2(lp * vec2(0.25, 0.08) + vec2(0.0, uTime * 0.3));
-      foam = max(foam, ring * smoothstep(0.25, 0.7, streak + ring * 0.3) * 0.9);
+    // (both fade out by 20 km: skip the noise there)
+    float foam = 0.0;
+    if (dist < 20000.0) {
+      float cover = smoothstep(0.55, 0.9, crest) * uFoamAmount * 0.8;
+      if (fftFade > 0.0) cover += clamp(textureGrad(uFFTDisp0, uv0, uv0dx, uv0dy).w * fftFade * 1.2, 0.0, 1.0) * uFoamAmount;
+      if (cover > 0.0) {
+        float foamN = fbm2(rest * 0.35 + vec2(uTime * 0.05, 0.0));
+        foam = clamp(cover * smoothstep(0.35, 0.75, foamN + cover * 0.4), 0.0, 1.0);
+      }
+      // ship wake / hull wash ring (exp(-sd / 7) < 1e-5 beyond 80 m)
+      if (uShipOn > 0.5) {
+        vec3 sp = rel - uShipRel;
+        vec2 lp = vec2(dot(sp, uShipX), dot(sp, uShipZ));
+        vec2 q = abs(lp) - vec2(15.5, 45.9);
+        float sd = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - 3.0;
+        if (sd < 80.0) {
+          float ring = exp(-max(sd, 0.0) / 7.0) * smoothstep(-2.0, 1.0, sd);
+          float streak = fbm2(lp * vec2(0.25, 0.08) + vec2(0.0, uTime * 0.3));
+          foam = max(foam, ring * smoothstep(0.25, 0.7, streak + ring * 0.3) * 0.9);
+        }
+      }
+      // far away foam averages into a slight brightening
+      foam *= 1.0 - smoothstep(3000.0, 20000.0, dist);
     }
-    // far away foam averages into a slight brightening
-    foam *= 1.0 - smoothstep(3000.0, 20000.0, dist);
     float foamAvg = uFoamAmount * 0.02 * smoothstep(3000.0, 20000.0, dist);
     vec3 foamCol = vec3(0.85) * (Esun * max(dot(N, uLightDir) * 0.6 + 0.4, 0.0) * max(mus, 0.0) + Esky) / 3.14159;
     ocean = mix(ocean, foamCol, clamp(foam + foamAvg, 0.0, 1.0));
@@ -318,6 +332,7 @@ void main() {
       if (i >= uPlCount) break;
       vec3 lv = uPlPos[i] - rel;
       float d2 = dot(lv, lv);
+      if (d2 >= uPlRange[i] * uPlRange[i]) continue;
       float dl = sqrt(d2);
       vec3 L = lv / dl;
       float win = pow(clamp(1.0 - pow(dl / uPlRange[i], 4.0), 0.0, 1.0), 2.0);
@@ -465,6 +480,8 @@ export class EarthSurface {
         uFFTSlope1: { value: null },
         uFFTOff: { value: new THREE.Vector4() },
         uFFTInvL: { value: new THREE.Vector2(1 / CASCADE_L[0], 1 / CASCADE_L[1]) },
+        uFFTTexel0: { value: CASCADE_L[0] / 256 },
+        uFFTLost: { value: 0 },
         uWaveOn: { value: 1 },
         uCoxMunk: { value: 0.03 },
         uFoamAmount: { value: 0.5 },

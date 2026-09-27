@@ -49,7 +49,13 @@ function upAtLocal(x: number, z: number, out: THREE.Vector3): THREE.Vector3 {
 }
 
 class HeightField {
-  constructor(readonly def: PatchDef, readonly data: Int16Array) {}
+  /** highest point (m) */
+  readonly maxH: number;
+  constructor(readonly def: PatchDef, readonly data: Int16Array) {
+    let m = 0;
+    for (let i = 0; i < data.length; i++) if (data[i] > m) m = data[i];
+    this.maxH = m * 0.1;
+  }
   /** bilinear height (m) at local x,z (pixel centers at (i+0.5)/n) */
   at(x: number, z: number): number {
     const d = this.def, n = d.hN;
@@ -414,7 +420,7 @@ export class Terrain {
     }
   }
 
-  /** per view: night lights on the terrain, detail strength */
+  /** per view: night lights on the terrain, detail strength, horizon culling */
   beforeViewRender(view: ViewInfo, camAlt: number, pixAng: number, nightLights = 0, nightF = 0): void {
     this.detailU.value = camAlt < 20_000 ? 1 : 0;
     this.pixAngU.value = pixAng;
@@ -422,6 +428,17 @@ export class Terrain {
     const p = view.camWorldPos;
     const s = Math.hypot(p.x, p.z), th = s / R;
     const lx = s > 1e-6 ? (p.x / s) * th * R : 0, lz = s > 1e-6 ? (p.z / s) * th * R : 0;
+    // horizon culling: a patch whose nearest point lies beyond the sea horizon plus the distance at
+    // which its highest peak drops below it is invisible (the ASDS view 600 km downrange would
+    // otherwise transform ~250k terrain triangles per frame for nothing)
+    const hC = Math.sqrt(2 * R * Math.max(camAlt, 0));
+    for (const c of this.group.children) {
+      const f = this.fields[c.name === 'env.terrain.t1' ? 't1' : 't2'];
+      if (!f) continue;
+      const d = f.def;
+      const dMin = Math.max(0, Math.hypot(lx - d.cx, lz - d.cz) - d.size * Math.SQRT1_2);
+      c.visible = dMin < (hC + Math.sqrt(2 * R * Math.max(f.maxH, 0))) * 1.1 + 5000;
+    }
     for (const [f, off, k] of [[this.fields.t1, this.detailOff1, 2048], [this.fields.t2, this.detailOff2, 4096]] as const) {
       if (!f) continue;
       const d = f.def, half = d.size / 2;

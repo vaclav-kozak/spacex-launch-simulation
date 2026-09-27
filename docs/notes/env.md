@@ -119,7 +119,7 @@ Only post reads them.
 * S1 crossing the deck punches a hole on ascent (at 1 km) and on descent (at the shell top). The hole widens and
   drifts with the wind, and is reset on seek-back.
 * Cost on an RTX 5070 Ti at 1080p is ~0.3–0.6 ms (march + resolve + composite + shadow map + probe), which
-  is ~2–4 ms on a GTX 1650. Quality levels 0..3 change the steps (24/32/44/60), resolution (¼ at q0, ½ otherwise),
+  is ~2–4 ms on a GTX 1650. Quality levels 0..3 change the steps (24/32/44/60), resolution (¼ at q0, ⅓ at q1, ½ at q2+),
   shadow map size (256/384/512/1024) and distance.
 * The cloud shadow map (0.03–0.25 ms per render on the 5070 Ti) is re-rendered **every 4th frame at q0 and every 2nd
   at q1** (every frame at q2+). It is re-rendered sooner when the camera leaves the middle 8 % of the box, the box
@@ -147,6 +147,57 @@ values below are the lower of two runs.
 * Wrapping `env.beforeViewRender` or cloud passes in the `GpuTimer` corrupts the `scene` reading (≈ 10 ms at
   pad q0). Timer queries do not nest, so time sub-passes only in isolation.
 
+## Perf (round 4, env only, RTX 5070 Ti, 1080p, GPU ms)
+Method: microbench (scratchpad `bench.py`). The app loop is frozen, then each env pass is timed alone, 20 renders
+inside one timer query, and the min of 5 trials is taken. Each view was run twice and the min kept. Scene pieces
+(earth, terrain, sky) are rendered alone into the scene target. Per-frame total = LUTs + FFT (if it runs) + cloud shadow
+/ its frame interval + march + resolve + composite + cloud depth + earth + terrain + sky + probe/40. The GPU is
+shared with other agents, so single values still jump by ±0.05 ms. The q2 rows changed by noise only, apart from
+the FFT skip above 13 km and the earth gating.
+
+| View | q0 before → after | q1 before → after | q2 before → after |
+|---|---|---|---|
+| `S1:pad:wide` T+8 | 0.23 → 0.14 | 0.42 → 0.24 | 0.72 → 0.59 |
+| `SHIP:deck` T+505 | 0.31 → 0.20 | 0.65 → 0.28 | 0.76 → 0.63 |
+| `S1:onboard` T+196 | 0.35 → 0.15 | 0.49 → 0.27 | 0.67 → 0.44 |
+| `S1:long_lens` twilight T+130 | 0.22 → 0.16 | 0.38 → 0.21 | 0.66 → 0.52 |
+
+* GTX 1650 factor: ~8× central (Time Spy; texture rate 7.4×, bandwidth 7×) and ~12× pessimistic for ALU-heavy passes.
+  * Env after: q0 ≈ 1.1–1.6 ms (1.7–2.4 pessimistic), q1 ≈ 1.7–2.3 ms (2.5–3.5), q2 ≈ 3.5–5.2 ms.
+  * Env before: q0 ≈ 1.7–2.8 ms, q1 ≈ 3.1–5.2 ms.
+  * q0 and q1 are within the 5 ms budget.
+  * The round-3 figure (3.5–7 ms) came from whole-scene perf.py deltas × 5–6 and included timer noise.
+* Where the time went before: the ocean FFT was 50–70 % of env at q0, and it also ran every frame at 107 km, where
+  it is invisible. At q1 the FFT, the cloud march (720×405, 0.11–0.13 ms) and the earth shader led.
+* Changes (q0/q1 only unless noted):
+  * **Ocean FFT** runs on a 128² grid at q ≤ 1 (256² at q2+): 0.13–0.16 → 0.07–0.09 ms.
+    * The spectrum is drawn from the same 256² random realization, so the swell and wind-sea waves are
+      identical. Only the capillary tail of cascade 1 above the 128 Nyquist is dropped.
+    * The dropped slope variance (`fft.lostSlopeVar`) goes into the GGX roughness (`uFFTLost`), so the
+      glitter level matches.
+    * All qualities: the FFT is skipped entirely while no view is below 13 km altitude. It is re-run on the
+      first frame a view comes back.
+  * **Cloud march** at ⅓ resolution at q1 (480×270 instead of 720×405): 0.11–0.13 → 0.05–0.06 ms. The pad q1 A/B
+    is visually identical, since the depth-aware upsample and temporal resolve hide it.
+  * **Earth shader** (all qualities, same output):
+    * FFT slopes are fetched only inside the FFT fade. They use `textureGrad` with gradients taken outside the
+      branch; implicit derivatives in the branch gave dark speckle along the 12 km fade line, which is the
+      deck horizon.
+    * Foam noise and the wake are skipped beyond 20 km and 80 m from the hull.
+    * Plume point lights are skipped outside their range.
+  * **Terrain** (all qualities): T1/T2 are hidden when the tile is below the horizon (horizon distance of the
+    camera + that of the tile's highest point, ×1.1 + 5 km). It saves little: terrain was already cheap thanks to
+    early-z.
+* Not changed: the LUTs (≈ 0.01 ms total), the cloud shadow (already amortised), and the q2/q3 steps, distance and
+  resolution.
+* Probe spike: the PMREM env-probe update (three r186, 256-sample GGX) costs ≈ 0.5 ms in the frame it runs,
+  i.e. ~4–6 ms on a 1650, once every 40 frames at q ≤ 1 (every 20 at q2+). The cost is mostly the fixed PMREM
+  blur, so it does not shrink with the 32² probe. It is the next lever if frame-time spikes matter
+  (lower sample count, or split the update over frames).
+* Shots: `shots/env4/*_q0_vs_q2.jpg` (left q0, right q2).
+  * Views: pad wide T+8, deck T+505, onboard T+196 and twilight long lens T+130, plus morning pad and deck.
+  * `ovals_before_top_after_bottom.png` shows the open-cell change.
+
 ## Terrain / ocean layering
 * The terrain meshes (T1 40 km, T2 400 km, both from DEM) are drawn first. The Earth surface shader draws the sea
   everywhere inside the T2 box, and terrain occludes it where land is above sea level. Offshore DEM is ≤ −4 m (see
@@ -171,7 +222,11 @@ values below are the lower of two runs.
   horizon (Belt of Venus over the Earth shadow) for a few seconds at T+100..200 in the twilight preset. Current
   cameras look up at the rocket and never catch it.
 * Env (open):
-  * Toward the horizon, the open-cell holes in the 2D cloud layer read as similar-sized ovals.
+  * Toward the horizon, the open-cell holes in the 2D cloud layer read as similar-sized ovals. Improved in round 4:
+    * The weather-map A channel (`gen_cloud_noise.py weather`) now has cell size varying ~2×, a per-cell
+      clear-centre size and a ~1–2 cell fbm on the ramp, so holes differ in size and some close up.
+    * R/G/B are byte-identical and there is no runtime cost. The march uses the same channel, so the hand-off
+      still matches.
   * The LA core in the city lights is saturated. That is the Black Marble visualisation; the street pattern
     breaks it up only below ~300 m footprint.
   * In the `k60_side` twilight sky there is a faint dark-brown Earth-shadow smudge on the limb.

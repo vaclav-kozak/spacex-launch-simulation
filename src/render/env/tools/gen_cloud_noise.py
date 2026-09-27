@@ -10,7 +10,8 @@ Outputs (public/data/env/):
                        domain-warped edges, per-cell strength; 0 on the rifts, 1 in strong cell cores;
                        equalised so thresholding at 1-c covers a fraction ~c
                     B: smooth fbm (layer height / thickness / warp)
-                    A: open-cell walls: coarse warped Voronoi, broken beaded walls (1 on a wall), equalised
+                    A: open-cell walls: coarse warped Voronoi (cell size ~2x), broken beaded walls (1 on a
+                       wall), per-cell clear-centre size, equalised
 Run: python3 src/render/env/tools/gen_cloud_noise.py [weather]   ("weather" = only the weather map)
 """
 import os
@@ -264,9 +265,13 @@ def weather():
     g = equalize(g)
     print('  G done', len(pts), 'cells')
 
-    # A: open cells. Coarse seeds (~11 per tile), strongly warped; walls of varying width, broken
-    # into beads (cumulus rings around clear cell centres)
-    pts2 = poisson_points(11 * 11, np.ones((4, 4)), wr)
+    # A: open cells. Coarse seeds (~11 per tile; density varies ~4x, so cell size ~2x, and a looser
+    # minimum distance than G), strongly warped; walls of varying width, broken into beads (cumulus
+    # rings around clear cell centres). Each cell gets its own clear-centre size and a ~1-2 cell
+    # fbm shifts the ramp, so under a mostly closed deck the holes differ in size and outline (some
+    # close up) instead of a lattice of similar ovals toward the horizon
+    dA = np.exp2(2.0 * (norm01(fbm(P, grid(16, 2), 3, 2, 0.5)) - 1.0))
+    pts2 = poisson_points(11 * 11, dA, wr, kmin=0.55)
     warp2 = np.stack([fbm(P, uv, 4, 4, 0.5), fbm(P, uv + 0.23, 4, 4, 0.5)], -1) * 0.035
     en2, j1, j2, _ = cell_edge(uv + warp2, pts2, 10)
     wid = 0.16 + 0.22 * wr.random(len(pts2))
@@ -274,9 +279,13 @@ def weather():
     wall = np.exp(-(en2 / ww) ** 2)
     brk = norm01(fbm(P, uv, 24, 3, 0.5))
     beads = norm01(fbm(P, uv, 64, 2, 0.5))
+    hs = 0.55 + 1.1 * wr.random(len(pts2))  # per-cell clear-centre scale (> 1: flat clear core)
+    hv = norm01(fbm(P, uv, 6, 3, 0.5))
     # walls broken into beads; a gentle ramp toward the wall inside the cell so a higher coverage
-    # threshold thickens the walls (cells close up) instead of speckling the clear centres
-    a = wall * (0.35 + 0.65 * np.clip((brk - 0.25) / 0.5, 0, 1)) * (0.55 + 0.45 * beads) + 0.3 * (1 - en2) ** 2
+    # threshold thickens the walls (cells close up) instead of speckling the clear centres. The ramp
+    # is monotonic in the wall distance (no ring-shaped holes) and 0.3 on every wall (continuous)
+    ramp = 0.3 * (1 - np.minimum(en2 * hs[j1], 1)) ** 2 + 0.07 * hv
+    a = wall * (0.35 + 0.65 * np.clip((brk - 0.25) / 0.5, 0, 1)) * (0.55 + 0.45 * beads) + ramp
     a = equalize(a)
     print('  A done', len(pts2), 'cells')
 

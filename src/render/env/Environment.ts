@@ -13,7 +13,7 @@ import { aerialUniforms, patchObject } from './aerial';
 import { createSkyMaterial, createSkyMesh } from './sky';
 import { loadStars } from './stars';
 import { computeEphemeris, TOD_EPOCHS, type Ephemeris } from './ephemeris';
-import { OceanFFT } from './oceanFFT';
+import { OceanFFT, CASCADE_L } from './oceanFFT';
 import { EarthSurface, MAX_PLUME_LIGHTS, type EarthTextures } from './earth';
 import { EnvProbe } from './envprobe';
 import { Terrain } from './terrain';
@@ -86,6 +86,8 @@ export class Environment implements FrameModule {
   };
   private envTime = 0;
   private missionT = 0;
+  /** some view rendered last frame is low enough to see the FFT detail (< ~12 km to the sea) */
+  private fftWanted = true;
   private qLevel = -1;
   // scratch
   private _v = new THREE.Vector3();
@@ -229,6 +231,8 @@ export class Environment implements FrameModule {
         (sh as unknown as { map: THREE.WebGLRenderTarget | null }).map = null;
       }
       this.terrain.setQuality(q);
+      // low quality: 128^2 FFT grid (4x fewer texels; the dropped capillary band goes into roughness)
+      this.fft.setSize(q <= 1 ? 128 : 256);
     }
     // sea state / wind
     const sk = `${s.seaState}|${s.windSpeed}|${s.windFromDeg}`;
@@ -256,12 +260,16 @@ export class Environment implements FrameModule {
     envLook.night = (this.nightGain - 1) / (NIGHT_GAIN - 1);
     this.moonE = ATMO.sunE * MOON_SUN_RATIO * Math.pow(e.moonIllum, 3) * this.nightGain;
 
-    // ocean detail (only needed when some camera is near the sea)
-    try {
-      this.fft.update(ctx.renderer, this.envTime);
-    } catch (err) {
-      if (this.frame < 3) console.warn('[env] fft', err);
+    // ocean detail, only when some view (last frame) is low enough to see it: the FFT displacement,
+    // slopes and foam all fade out by 12 km from the camera
+    if (this.fftWanted || this.frame <= 2) {
+      try {
+        this.fft.update(ctx.renderer, this.envTime);
+      } catch (err) {
+        if (this.frame < 3) console.warn('[env] fft', err);
+      }
     }
+    this.fftWanted = false;
     this.clouds.update(snap, _dt);
     if (this.frame % 30 === 1) patchObject(ctx.worldRoot);
     if (this.stars) (this.stars.material as THREE.ShaderMaterial).uniforms.uTime.value = ctx.realTime;
@@ -352,6 +360,9 @@ export class Environment implements FrameModule {
     eu.uFFTDisp1.value = this.fft.disp[1];
     eu.uFFTSlope0.value = this.fft.slope[0];
     eu.uFFTSlope1.value = this.fft.slope[1];
+    eu.uFFTTexel0.value = CASCADE_L[0] / this.fft.n;
+    eu.uFFTLost.value = this.fft.lostSlopeVar;
+    if (camAlt < 13_000) this.fftWanted = true;
     eu.uWaveOn.value = camAlt < 40_000 ? 1 : 0;
     eu.uCloudOn.value = 0.95;
     eu.uCloudFade.value.set(this.clouds.volumetricOn * (this.clouds.active ? 1 : 0), this.clouds.maxDist * 0.6, this.clouds.maxDist, 0);

@@ -839,7 +839,8 @@ export class Clouds {
     const on = this.ready && this.volumetricOn > 0.001 && cloudWeatherUniforms.uCldCover.value > 0.001;
     this.composite.visible = on;
     this.depthMesh.visible = on;
-    this.scale = q <= 0 ? 4 : 2;
+    // march resolution: 1/4 (q0), 1/3 (q1), 1/2 (q2+) of the view in each axis
+    this.scale = q <= 0 ? 4 : q === 1 ? 3 : 2;
     mu.uSteps.value = [24, 32, 44, 60][q] ?? 44;
     mu.uLSteps.value = [3, 4, 5, 6][q] ?? 5;
     this.maxDist = Math.min(400_000, ([70_000, 100_000, 130_000, 160_000][q] ?? 130_000) + 3 * camAlt);
