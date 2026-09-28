@@ -73,8 +73,8 @@ async def record_take(browser, args, cut, shot, odir):
     await pg.evaluate('__app.audio.ac.resume()')
     # dry run through the shot so every shader, VFX system and one-shot sound is built, then seek back:
     # a first-use hitch during the recording would let the sim fall behind the audio clock
-    await pg.evaluate('''([a, b]) => { let t = __app.sim.getSnapshot().t;
-      while (t < b) { __app.frame(1 / 30); t = __app.sim.getSnapshot().t; } __app.sim.seek(a); }''', [t0 - apre, t1 + 0.5])
+    await pg.evaluate('''([a, b]) => { let t = __app.sim.getSnapshot().t, n = 0;
+      while (t < b && n++ < 20000) { __app.frame(1 / 30); t = __app.sim.getSnapshot().t; } __app.sim.seek(a); }''', [t0 - apre, t1 + 0.5])
     await pg.evaluate(DRIVE_JS)
     await pg.evaluate('__drive.warm = 90')
     await pg.wait_for_function('__drive.warm === 0', timeout=120000)
@@ -82,7 +82,11 @@ async def record_take(browser, args, cut, shot, odir):
         sys.exit('audio capture not available')
     await pg.wait_for_function('__app.audio.captureStartFrame !== null', timeout=10000)
     drive = await pg.evaluate('(() => { const d = __drive; d.ac0 = __app.audio.ac.currentTime; d.t0 = __app.sim.getSnapshot().t; d.on = true; return {ac0: d.ac0, t0: d.t0}; })()')
-    while await pg.evaluate('__app.sim.getSnapshot().t') < t1 + 0.5:
+    deadline = time.time() + (t1 + 0.5 - drive['t0']) + 60
+    while (t := await pg.evaluate('__app.sim.getSnapshot().t')) < t1 + 0.5:
+        if time.time() > deadline:
+            st = await pg.evaluate('({ac: __app.audio.ac.currentTime, state: __app.audio.ac.state, lag: __drive.lag.length})')
+            sys.exit(f"{shot['id']}: sim stuck at t={t:.3f} (target {t1 + 0.5}); {st}")
         await pg.wait_for_timeout(100)
     lag = await pg.evaluate('__drive.lag.slice(30)')  # sim behind the audio clock, per rAF (s)
     b64 = await pg.evaluate('__app.audio.debugCaptureStop()')
@@ -133,4 +137,5 @@ async def main():
         await browser.close()
 
 
-asyncio.run(main())
+if __name__ == '__main__':
+    asyncio.run(main())

@@ -1,5 +1,5 @@
 {
-  "about": "9:16 clip: entry burn, landing burn, touchdown on the droneship.",
+  "about": "9:16 clip: entry burn, landing burn, the onboard view of the droneship rushing up, touchdown.",
   "query": "tod=twilight&quality=ultra&hud=min&labels=0",
   "fps": 60,
   "size": [540, 960],
@@ -9,8 +9,9 @@
   "fade": [0.15, 0.8],
   "shots": [
     {"id": "entry", "cam": "S1:chase", "t0": 384.0, "t1": 391.5, "preroll": 3},
-    {"id": "burn", "cam": "S1:onboard_down", "t0": 486.0, "t1": 491.5, "preroll": 3, "in": "dissolve", "xf": 0.4},
-    {"id": "touchdown", "cam": "SHIP:deck", "t0": 502.0, "t1": 510.5, "preroll": 3, "in": "cut"},
+    {"id": "burn", "cam": "S1:chase", "t0": 486.0, "t1": 492.0, "preroll": 3, "in": "dissolve", "xf": 0.4},
+    {"id": "approach", "cam": "S1:onboard_down", "t0": 498.5, "t1": 503.2, "preroll": 3, "in": "dissolve", "xf": 0.3},
+    {"id": "touchdown", "cam": "SHIP:deck", "t0": 503.2, "t1": 510.5, "preroll": 3, "in": "cut"},
     {"id": "deck", "cam": "S1:cinematic:ship_orbit", "t0": 511.0, "t1": 518.0, "preroll": 10, "in": "dissolve", "xf": 0.6}
   ],
   "cards": [

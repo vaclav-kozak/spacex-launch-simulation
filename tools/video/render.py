@@ -13,9 +13,9 @@ of how long a frame takes to render, so a take is perfectly smooth at any resolu
 Timers (setTimeout, performance.now, rAF) run on Playwright's fake clock and CSS animations are
 stepped on the same virtual clock, so HUD captions and banners animate at video speed.
 
-Output: <out>/takes/<id>.mkv (x264 yuv444p CRF 10, lossless-looking intermediate) and <id>.json with
-the mission time of every kept frame. Existing takes are kept unless --force; shots that reference another
-cut's take ("take": "<cut>/<id>") are not rendered here.
+Output: <out>/takes/<id>.mkv (JPEG q100 captures, x264 yuv444p CRF 10, lossless-looking intermediate) and
+<id>.json with the mission time of every kept frame. Existing takes are kept unless --force; shots that reference
+another cut's take ("take": "<cut>/<id>") are not rendered here.
 """
 import argparse, asyncio, base64, json, os, subprocess, sys, time
 from playwright.async_api import async_playwright
@@ -58,9 +58,13 @@ async def render_take(browser, args, cut, shot, odir):
     # clip.scale = DPR, otherwise CDP returns CSS-pixel size (1080p for a 4K canvas)
     clip = {'x': 0, 'y': 0, 'width': w, 'height': h, 'scale': scale}
 
+    # JPEG q100 captures ~3.5x faster than PNG on smoke- and plume-filled 8 MP frames (the PNG encoder is the
+    # bottleneck); its 4:2:0 chroma is below what the 4:2:0 deliverables keep anyway. "capture": "png" opts out.
+    fmt = cut.get('capture', 'jpeg')
+    cap = {'format': fmt, 'optimizeForSpeed': True, 'clip': clip, **({'quality': 100} if fmt == 'jpeg' else {})}
     path = os.path.join(odir, 'takes', f"{shot['id']}.mkv")
     ff = subprocess.Popen(['ffmpeg', '-v', 'error', '-y', '-f', 'image2pipe', '-framerate', str(fps),
-                           '-c:v', 'png', '-i', '-', '-c:v', 'libx264', '-preset', 'medium', '-crf', '10',
+                           '-c:v', 'mjpeg' if fmt == 'jpeg' else 'png', '-i', '-', '-c:v', 'libx264', '-preset', 'medium', '-crf', '10',
                            '-pix_fmt', 'yuv444p', '-r', str(fps), path], stdin=subprocess.PIPE)
     dt = 1.0 / fps
     times = []
@@ -75,13 +79,15 @@ async def render_take(browser, args, cut, shot, odir):
         t = await pg.evaluate('(dt) => { __app.frame(dt); __vt.sync(dt * 1000); return __app.sim.getSnapshot().t; }', dt)
         if i < pre_n:
             continue
-        shot_png = await cdp.send('Page.captureScreenshot', {'format': 'png', 'optimizeForSpeed': True, 'clip': clip})
-        ff.stdin.write(base64.b64decode(shot_png['data']))
+        img = await cdp.send('Page.captureScreenshot', cap)
+        ff.stdin.write(base64.b64decode(img['data']))
         times.append(round(t, 4))
         k = i - pre_n + 1
         if k % 60 == 0 or k == keep_n:
-            el = time.time() - tstart
-            print(f"  {shot['id']}: {k}/{keep_n} frames  t={t:.2f}  {el / (i + 1):.2f} s/frame", flush=True)
+            now = time.time()
+            print(f"  {shot['id']}: {k}/{keep_n} frames  t={t:.2f}  {(now - tstart) / ((k - 1) % 60 + 1):.2f} s/frame",
+                  flush=True)
+            tstart = now
     ff.stdin.close()
     ff.wait()
     json.dump({'id': shot['id'], 'fps': fps, 't0': t0, 't1': t1, 'size': [w * scale, h * scale],
@@ -121,4 +127,5 @@ async def main():
         await browser.close()
 
 
-asyncio.run(main())
+if __name__ == '__main__':
+    asyncio.run(main())

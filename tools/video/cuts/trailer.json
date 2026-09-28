@@ -10,12 +10,13 @@
   "shots": [
     {"id": "03_ignition", "take": "launch/03_ignition", "cam": "S1:pad:engine", "t0": -3.4, "t1": 0.9},
     {"id": "04_liftoff", "take": "launch/04_liftoff", "cam": "S1:pad:up", "t0": 1.5, "t1": 6.7, "in": "cut"},
-    {"id": "05_tracking", "take": "launch/05_tracking", "cam": "S1:long_lens", "t0": 14.0, "t1": 17.5, "in": "dissolve", "xf": 0.5},
+    {"id": "05_tracking", "take": "launch/05_tracking", "cam": "S1:long_lens", "t0": 14.0, "t1": 17.0, "in": "dissolve", "xf": 0.5},
     {"id": "06_staging", "take": "launch/06_staging", "cam": "S1:chase", "t0": 146.0, "t1": 151.0, "split": true, "in": "dissolve", "xf": 0.5},
-    {"id": "07_jellyfish", "take": "launch/07_jellyfish", "cam": "S1:long_lens:twilight", "t0": 151.0, "t1": 157.0, "in": "cut"},
+    {"id": "07_jellyfish", "take": "launch/07_jellyfish", "cam": "S1:long_lens:twilight", "t0": 151.0, "t1": 156.0, "in": "cut"},
     {"id": "09_entry_burn", "take": "launch/09_entry_burn", "cam": "S1:chase", "t0": 386.0, "t1": 392.0, "in": "dissolve", "xf": 0.5},
-    {"id": "10_landing", "take": "launch/10_landing", "cam": "S1:onboard_down", "t0": 487.0, "t1": 491.0, "in": "dissolve", "xf": 0.4},
-    {"id": "11_touchdown", "take": "launch/11_touchdown", "cam": "SHIP:deck", "t0": 503.0, "t1": 510.5, "in": "cut"},
+    {"id": "10_landing", "take": "launch/10_landing", "cam": "S1:chase", "t0": 487.0, "t1": 490.5, "in": "dissolve", "xf": 0.4},
+    {"id": "10b_approach", "take": "launch/10b_approach", "cam": "S1:onboard_down", "t0": 499.5, "t1": 503.2, "in": "dissolve", "xf": 0.3},
+    {"id": "11_touchdown", "take": "launch/11_touchdown", "cam": "SHIP:deck", "t0": 503.2, "t1": 510.5, "in": "cut"},
     {"id": "12_on_deck", "take": "launch/12_on_deck", "cam": "S1:cinematic:ship_orbit", "t0": 511.0, "t1": 516.0, "in": "dissolve", "xf": 0.6}
   ],
   "cards": [
