@@ -42,9 +42,11 @@ class Gauge {
     );
   }
 
-  update(v: number, dt: number, valid: boolean): void {
+  /** returns the displayed text (the narrow layout's compact readout repeats it) */
+  update(v: number, dt: number, valid: boolean): string {
     const sv = this.sm.update(v, dt);
-    setText(this.num, valid && Number.isFinite(sv) ? this.fmt(sv) : '–');
+    const txt = valid && Number.isFinite(sv) ? this.fmt(sv) : '–';
+    setText(this.num, txt);
     const frac = valid && Number.isFinite(sv) ? clamp(sv / this.max, 0, 1) : 0;
     if (Math.abs(frac - this.lastFrac) > 0.0005) {
       this.lastFrac = frac;
@@ -53,6 +55,7 @@ class Gauge {
       this.cap.setAttribute('cx', (50 + 44 * Math.sin(a)).toFixed(2));
       this.cap.setAttribute('cy', (50 - 44 * Math.cos(a)).toFixed(2));
     }
+    return txt;
   }
   reset(): void { this.sm.reset(); }
 }
@@ -197,6 +200,9 @@ export class StageTelemetry {
   private engines: EngineMap;
   private att = new AttitudeIcon();
   private props = new PropBars();
+  /** narrow layout: one line of numbers instead of the gauges */
+  private miniSpd: HTMLElement;
+  private miniAlt: HTMLElement;
 
   constructor(side: 'left' | 'right', engineCount: number, speedMax: number, altMax: number) {
     this.speed = new Gauge('SPEED', 'KM/H', speedMax, (v) => fmtInt(Math.max(0, v)));
@@ -208,7 +214,11 @@ export class StageTelemetry {
     const row = side === 'left'
       ? h('div', { class: 'st-row' }, extras, this.speed.el, this.alt.el, this.props.el)
       : h('div', { class: 'st-row' }, this.props.el, this.speed.el, this.alt.el, extras);
-    this.el = h('div', { class: `stage stage-${side}` }, h('div', { class: 'st-head' }, this.titleEl, this.statusEl), row);
+    this.miniSpd = h('b');
+    this.miniAlt = h('b');
+    const mini = h('div', { class: 'st-mini' },
+      h('span', {}, this.miniSpd, h('i', { text: 'KM/H' })), h('span', {}, this.miniAlt, h('i', { text: 'KM' })));
+    this.el = h('div', { class: `stage stage-${side}` }, h('div', { class: 'st-head' }, this.titleEl, this.statusEl), row, mini);
   }
 
   update(v: StageView, dt: number): void {
@@ -217,8 +227,8 @@ export class StageTelemetry {
     toggleClass(this.el, 'lost', v.lost);
     const b = v.body;
     const ok = !!b && !v.lost;
-    this.speed.update(b ? displaySpeed(b) * 3.6 : NaN, dt, ok);
-    this.alt.update(b ? Math.max(0, b.altitude) / 1000 : NaN, dt, ok);
+    setText(this.miniSpd, this.speed.update(b ? displaySpeed(b) * 3.6 : NaN, dt, ok));
+    setText(this.miniAlt, this.alt.update(b ? Math.max(0, b.altitude) / 1000 : NaN, dt, ok));
     this.engines.update(ok ? b : null);
     this.att.update(b, v.silhouette, dt);
     // LOX / RP-1 from the sim's split (O/F 2.56) when present, else both from the total

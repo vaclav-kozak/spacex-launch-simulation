@@ -54,6 +54,8 @@ export class CalloutPlayer {
   dropped = 0;
   /** debug ring (last 40): started / dropped lines with mission-time lag and clip length */
   log: { what: 'play' | 'drop'; id: string; evT: number; atT: number; lagR: number; dur: number }[] = [];
+  /** debug (video subtitles): every clip started, with its AudioContext start time and length */
+  spoken: { text: string; voice: string; at: number; dur: number }[] = [];
   private note(what: 'play' | 'drop', q: QItem, missionT: number, realNow: number, dur: number): void {
     this.log.push({ what, id: q.id || q.text.slice(0, 24), evT: +q.t.toFixed(2), atT: +missionT.toFixed(2), lagR: +(realNow - q.real).toFixed(2), dur: +dur.toFixed(2) });
     if (this.log.length > 40) this.log.shift();
@@ -106,6 +108,9 @@ export class CalloutPlayer {
     }
     return p;
   }
+  /** clips decoded so far / clips in the manifest (video capture waits for all of them) */
+  decodeProgress(): [number, number] { return [this.buffers.size, new Set(this.lines.map((l) => l.file)).size]; }
+
   decodeAll(ac: BaseAudioContext): void {
     // stagger so the main thread is not blocked at unlock
     let i = 0;
@@ -190,12 +195,14 @@ export class CalloutPlayer {
       }
       this.queue.shift();
       let t = ac.currentTime + 0.02;
-      for (const b of bufs as AudioBuffer[]) {
+      for (const [i, b] of (bufs as AudioBuffer[]).entries()) {
         const s = ac.createBufferSource();
         s.buffer = b;
         s.connect(out);
         s.start(t);
         this.current = s;
+        this.spoken.push({ text: q.lines.length > 1 ? q.lines[i].text : q.text, voice: q.voice, at: t, dur: b.duration });
+        if (this.spoken.length > 200) this.spoken.shift();
         t += b.duration + 0.05;
       }
       this.busyUntil = t;

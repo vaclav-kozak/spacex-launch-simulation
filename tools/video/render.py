@@ -2,7 +2,7 @@
 """Render the shots of a cut list frame by frame, as video takes (no audio).
 
 Usage:
-  python3 tools/video/render.py tools/video/cuts/launch.json [--only id,id] [--out DIR]
+  python3 tools/video/render.py tools/video/cuts/launch.json [--only id,id] [--force] [--out DIR]
       [--scale 2] [--fps 60] [--url http://127.0.0.1:5173]
 
 Each shot is its own take: the page opens with ?step=1 (no rAF loop) at seek = t0 - preroll with the
@@ -14,11 +14,12 @@ Timers (setTimeout, performance.now, rAF) run on Playwright's fake clock and CSS
 stepped on the same virtual clock, so HUD captions and banners animate at video speed.
 
 Output: <out>/takes/<id>.mkv (x264 yuv444p CRF 10, lossless-looking intermediate) and <id>.json with
-the mission time of every kept frame.
+the mission time of every kept frame. Existing takes are kept unless --force; shots that reference another
+cut's take ("take": "<cut>/<id>") are not rendered here.
 """
 import argparse, asyncio, base64, json, os, subprocess, sys, time
 from playwright.async_api import async_playwright
-from common import GPU_ENV, CHROME_ARGS, HIDE_CSS, load_cut, shot_url, out_dir
+from common import GPU_ENV, CHROME_ARGS, HIDE_CSS, load_cut, own_shots, shot_url, out_dir
 
 # Steps every CSS animation/transition on a virtual clock instead of wall time.
 VT_JS = """
@@ -36,7 +37,7 @@ window.__vt = { now: 0, start: new WeakMap(), sync(dtMs) {
 
 async def render_take(browser, args, cut, shot, odir):
     fps = args.fps or cut['fps']
-    scale = args.scale or cut['scale']
+    scale = cut['scale']
     w, h = cut['size']
     t0, t1 = shot['t0'], shot['t1']
     pre_n = round(shot['preroll'] * fps)
@@ -50,7 +51,7 @@ async def render_take(browser, args, cut, shot, odir):
     url = shot_url(args.url, cut, shot, t0 - shot['preroll'], 'step=1')
     await pg.goto(url, wait_until='load', timeout=180000)
     await pg.wait_for_function('window.__app && window.__app.ready === true', timeout=180000)
-    await pg.add_style_tag(content=HIDE_CSS)
+    await pg.add_style_tag(content=HIDE_CSS + cut['css'])
     await pg.evaluate(VT_JS)
     await pg.clock.pause_at(await pg.evaluate('Date.now()') + 1000)
     cdp = await ctx.new_cdp_session(pg)
@@ -96,16 +97,21 @@ async def main():
     ap.add_argument('cut')
     ap.add_argument('--only', default='')
     ap.add_argument('--out', default=None)
+    ap.add_argument('--force', action='store_true', help='re-render takes that already exist')
     ap.add_argument('--scale', type=float, default=None)
     ap.add_argument('--fps', type=int, default=None)
     ap.add_argument('--url', default=os.environ.get('SIM_URL', 'http://127.0.0.1:5173'))
     args = ap.parse_args()
     cut = load_cut(args.cut)
-    odir = out_dir(args.cut, args.out)
+    if args.scale:
+        cut['scale'] = args.scale
+    odir = out_dir(cut, args.out)
     only = set(filter(None, args.only.split(',')))
-    shots = [s for s in cut['shots'] if not only or s['id'] in only]
+    shots = [s for s in own_shots(cut) if (not only or s['id'] in only)
+             and (args.force or only or not os.path.exists(os.path.join(odir, 'takes', s['id'] + '.json')))]
     if not shots:
-        sys.exit('no shots selected')
+        print('nothing to render (all takes exist; --force to redo)')
+        return
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, env=dict(os.environ, **GPU_ENV), args=CHROME_ARGS)
         for s in shots:

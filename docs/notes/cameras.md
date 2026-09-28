@@ -106,7 +106,31 @@ click = maximize/restore, left-drag = orbit (switches to orbit from current pose
   **Director:** in `tod=twilight`, the S1 tile takes this shot from MECO+3 to MECO+17 (`TWILIGHT_WIDE`, ~T+148–162).
   The S1/S2 split logic is unchanged, and the S2 tile stays on its own shot.
   Shots: `shots/r4c/dir_tw_{150..166}.png`.
-* **Deck PTZ:** keeps the booster inside ~88% of the half-frame. Recentring starts earlier at wide fov.
+* **Deck cam (round 5, `SHIP:deck`, label OCISLY):** replaces the deck PTZ. It is a fixed wide camera on the stern
+  mast platform beside the satcom domes (ship frame x −9, y 9.5, z −44.2; +X port, +Z bow), ~45 m aft of the landing
+  point, looking forward along the deck: both wing railings and the flood poles run toward the booster (the classic
+  webcast deck view). The lens (`fitStandingLocal`, 30–100°) is set for the *landed* booster: feet at 20%, top at
+  93% of the frame height, ~70° vertical in 16:9, and wider in portrait so its width fits. The lens stays fixed, with
+  no zoom and no tilt (`tiltMax` 0; it only pans with the booster's deck spot, clamped to the deck). As on the real fixed
+  cam, the deck (floods, landing circle) holds the frame while the plume glow grows. The plume enters from the top at
+  ~T+503, then the booster with its legs out, and it touches down mid-frame. An operator tilt after the high booster
+  (tried 7–25°) lost the deck under the HUD right after the cut. Dev override: `?deckcam=x,y,z,lo,hi,tiltMax`.
+  A low wing-corner position (−24.5, 6.2, −28.5) was tried and rejected: it sits inside the touchdown steam.
+* **Cinematic `ship_orbit` (round 5, label DECK ORBIT):** a slow orbit/push-in around the landed booster, which
+  is anchored at its deck spot (ship axes flattened to the horizon, so the swell does not tilt the move).
+  Timing is from `landing.touchdownT` (else from the cut). It starts at azimuth 196° (ship frame, from +X toward +Z:
+  starboard-aft, looking WSW at the twilight band, with the moon behind the camera) and turns at 1.6°/s. Over 22 s
+  (smoothstep) it pushes from 92 m to 58 m and descends from 17 m to 10 m above the sea. `fitStanding` puts the
+  feet at 16% and the top at 95% of the frame height (above the HUD band / MinHud), widened when the booster's width
+  needs it (portrait-safe), fov 12–70. Without a booster it frames the ship (+30 m).
+  Dev override: `?shiporbit=az0,rate,d0,d1,h0,h1,push,lo,hi`. The old version sat 150 m out and 7 m up, and the ship was tiny.
+* **Portrait (round 5, 9:16 cuts `tools/video/cuts/v*.json`):**
+  * The chase fits its projected extent with the real aspect. It used `max(1, aspect)`, so a diagonal booster
+    (entry burn, staging) was cut by the narrow frame edges.
+  * The long lens bounds the operator lag (`maxErr`) by the *horizontal* fov when the frame is narrower than it is tall.
+  * Deck and ship_orbit are aspect-aware as above.
+  * Onboard cams and the twilight wide were already hor+. Pad `up`/`engine` frame the vehicle full-height as is.
+  * Checked shots: `scratchpad/agents/landing/after/p_*.png`.
 * **Director, booster descent:**
   * AERO: chase for 14 s after ENTRY_BURN_END, then onboard_down to +30 s, then chase.
   * Support-ship long lens only when the booster is inside 15 km of the ship site (≥ ~25% of the frame at the

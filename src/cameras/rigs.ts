@@ -226,7 +226,7 @@ export class ChaseRig extends Rig {
     const aim = _v3.copy(fr.center).add(this.look);
     this.aimAt(view, aim);
 
-    // fit the body's PROJECTED extent (+ a share of the visible plume) into the 16:9 frame: a booster
+    // fit the body's PROJECTED extent (+ a share of the visible plume) into the frame: a booster
     // seen along its axis or lying across the wide frame dimension needs a much tighter lens than
     // its raw length suggests
     // (both ends measured from the aim point, which leads / leans toward the plume)
@@ -234,7 +234,8 @@ export class ChaseRig extends Rig {
     const right = _v2.crossVectors(d, upAt(view.camWorldPos, _v3)).normalize();
     const camUp = _v3.crossVectors(right, d);
     const rad = Math.min(L, 4.5) * 0.5;
-    const aspect = Math.max(1, inp.aspect);
+    // real aspect (portrait included): a booster lying across a 9:16 frame needs the narrow width fitted
+    const aspect = Math.max(0.3, inp.aspect || 16 / 9);
     let tanNeed = 0.05;
     for (let k = 0; k < 2; k++) {
       const s = k === 0 ? L * 0.5 : -(L * 0.5 + (orbitMode ? 0 : Math.min(plume, 2 * L) * (focus === 'S2' ? 0.05 : 0.12)));
@@ -462,8 +463,10 @@ export class LongLensRig extends Rig {
     dT.multiplyScalar(1 / Math.max(1e-6, dist));
     if (this.fresh) this.dir.copy(dT);
     else this.dir.lerp(dT, expK(dtSim, 0.14)).normalize();
-    // keep the target inside the frame even if the operator lags (warp, fast crossings)
-    const maxErr = this.fov * RAD * 0.3;
+    // keep the target inside the frame even if the operator lags (warp, fast crossings); `fov` is vertical,
+    // so a portrait frame (narrower than tall) bounds the lag by its horizontal fov instead
+    const aspect = Math.max(0.3, inp.aspect || 16 / 9);
+    const maxErr = (aspect < 1 ? 2 * Math.atan(Math.tan(this.fov * 0.5 * RAD) * aspect) : this.fov * RAD) * 0.3;
     const err = this.dir.angleTo(dT);
     if (err > maxErr) this.dir.lerp(dT, 1 - maxErr / err).normalize();
 
@@ -593,58 +596,89 @@ export class LongLensRig extends Rig {
     this.fresh = false;
   }
 }
+const _p1 = new THREE.Vector3();
+const _p2 = new THREE.Vector3();
 const _rem: Remnant = { center: new THREE.Vector3(), radius: 0, age: 0 };
 const _blobs = [0, 1, 2].map(() => ({ p: new THREE.Vector3(), r: 0 }));
 const _fr2: Framing = { center: new THREE.Vector3(), size: 1, axis: new THREE.Vector3() };
 // long-lens applies shake itself (fov-scaled): SHAKE_PROFILE.long_lens.amp = 0
 
 // ---------------------------------------------------------------------------------------------
-// DECK: camera on OCISLY's aft structure, rides the ship, PTZ-tracks the incoming booster.
+// DECK: fixed wide camera on OCISLY's stern mast, rides the ship, tilts after the incoming booster.
 
-const DECK_CAM_LOCAL = new THREE.Vector3(-13, 9.5, -OCISLY.deckLength / 2 + 1.5);
-const DECK_AIM_LOCAL = new THREE.Vector3(0, 21, 0);
+/** Deck cam (ship frame: +X port, +Z bow, deck at y 0): on the stern mast platform beside the satcom domes,
+ * ~45 m aft of the landing point, looking forward along the deck: both wing railings and the flood poles run
+ * toward the booster (the classic webcast deck view). At the default station it faces WNW, with the twilight
+ * band to the left of the landing. The lens is set for the landed booster (feet at `lo`, top at `hi` of the
+ * frame height: ~70 deg vertical in 16:9, a wide webcast deck cam) and stays there, like the real fixed deck
+ * cam: the deck (floods, landing circle) holds the frame while the plume glow grows, then the plume and the
+ * booster descend into it from the top (~T+503 on the nominal mission), legs out, touchdown mid-frame. `tiltMax`
+ * (deg, default 0) lets an operator tilt up after a high booster; 7-14 deg already lose the deck under the HUD
+ * for the first seconds after the cut. Dev override: ?deckcam=x,y,z,lo,hi,tiltMax */
+const DECK_CAM = { x: -9, y: 9.5, z: -44.2, lo: 0.2, hi: 0.93, tiltMax: 0 };
+function devDeckCam(): typeof DECK_CAM {
+  const o = { ...DECK_CAM };
+  if (typeof location === 'undefined') return o;
+  const v = new URLSearchParams(location.search).get('deckcam');
+  if (!v) return o;
+  const keys = Object.keys(DECK_CAM) as (keyof typeof DECK_CAM)[];
+  v.split(',').map(Number).forEach((x, i) => { if (Number.isFinite(x) && keys[i]) o[keys[i]] = x; });
+  return o;
+}
 
 export class DeckRig extends Rig {
   readonly mode = 'deck' as const;
   private aim = new THREE.Vector3();
-  private fov = 84;
+  private fov = 75;
   private invShip = new THREE.Quaternion();
+  private local = new THREE.Vector3();
 
   describe(): string { return 'OCISLY'; }
 
   update(view: ViewInfo, inp: RigInput): void {
     const { snap, dtSim } = inp;
+    const c = devDeckCam();
     const ship = snap.bodies.SHIP;
     const tracked: BodyId = inp.focus === 'SHIP' ? 'S1' : inp.focus;
     const fr = bodyFraming(snap, tracked, this.fr);
-    view.camWorldPos.copy(DECK_CAM_LOCAL).applyQuaternion(ship.quat).add(ship.pos);
+    const b = snap.bodies[tracked];
+    const gone = b.status === 'gone' || b.status === 'destroyed';
+    this.local.set(c.x, c.y, c.z);
+    view.camWorldPos.copy(this.local).applyQuaternion(ship.quat).add(ship.pos);
     this.invShip.copy(ship.quat).invert();
-    const def = _v1.copy(DECK_AIM_LOCAL).sub(DECK_CAM_LOCAL).normalize();
-    const bLocal = _v2.copy(fr.center).sub(view.camWorldPos).applyQuaternion(this.invShip);
+    const aspect = Math.max(0.3, inp.aspect || 16 / 9);
+
+    // landing framing (ship frame): a booster standing on the deck under the incoming one (its current deck
+    // spot, clamped to the deck), feet at `lo` and top at `hi` of the frame
+    const spot = _v1.copy(gone ? ship.pos : b.pos).sub(ship.pos).applyQuaternion(this.invShip);
+    spot.set(clamp(spot.x, -18, 18), 0, clamp(spot.z, -25, 30));
+    const camL = this.local;
+    const pBot = _p1.copy(spot), pTop = _p2.copy(spot).setY(F9.s1.length + 0.5);
+    // fitStanding works in the camera's local vertical: use the ship frame directly (ship +Y = up)
+    const fovLand = clamp(fitStandingLocal(camL, pBot, pTop, 10, aspect, c.lo, c.hi, 0.9, _v2), 30, 100);
+    const def = _v3.copy(_v2);
+
+    // the incoming booster in the ship frame
+    const bLocal = _v4.copy(fr.center).sub(view.camWorldPos).applyQuaternion(this.invShip);
     const dist = bLocal.length();
     bLocal.multiplyScalar(1 / Math.max(1e-6, dist));
-    const b = snap.bodies[tracked];
-    const gone = b.status === 'gone';
-
-    // zoom: wide when close, tighter when the booster is still far out
-    const fovT = gone ? 84 : clamp((2 * Math.atan((fr.size * 3.2) / 2 / Math.max(1, dist))) / RAD, 7, 84);
-    this.fov = this.fresh ? fovT : Math.exp(lerp(Math.log(this.fov), Math.log(fovT), expK(dtSim, 0.6)));
-    // PTZ: zoomed in on the incoming booster it stays centred; as the lens opens up the operator
-    // lets it drift toward the frame edge to get the deck in, but never lets any part of it leave
-    const aimT = _v3.copy(def);
-    if (!gone) {
+    this.fov = this.fresh ? fovLand : Math.exp(lerp(Math.log(this.fov), Math.log(fovLand), expK(dtSim, 0.6)));
+    // optional tilt: keep the booster inside ~85% of the half-frame, up to tiltMax above the landing framing;
+    // the operator settles back on the landing framing as it comes down
+    const aimT = _v5.copy(def);
+    if (!gone && c.tiltMax > 0) {
       const halfV = this.fov * RAD * 0.5;
       const bAng = Math.atan((fr.size * 0.5) / Math.max(1, dist));
-      const lim = Math.max(0, halfV * 0.88 - bAng * 1.05) * smoothstep(22, 62, this.fov);
+      const lim = Math.max(0, halfV * 0.85 - bAng);
       const ang = def.angleTo(bLocal);
       if (ang > lim) {
         _q1.setFromUnitVectors(def, bLocal);
-        _q2.identity().slerp(_q1, (ang - lim) / ang);
+        _q2.identity().slerp(_q1, Math.min(ang - lim, c.tiltMax * RAD) / ang);
         aimT.applyQuaternion(_q2);
       }
     }
     if (this.fresh) this.aim.copy(aimT);
-    else this.aim.lerp(aimT, expK(dtSim, 0.22)).normalize();
+    else this.aim.lerp(aimT, expK(dtSim, 0.25)).normalize();
     lookQuat(this.aim, Y, _q1);
     view.camera.quaternion.copy(ship.quat).multiply(_q1);
     view.camera.fov = this.fov;
@@ -661,6 +695,24 @@ export class DeckRig extends Rig {
     view.onboard = false;
     this.fresh = false;
   }
+}
+
+/** fitStanding in a frame whose +Y is up (e.g. the ship frame): same contract, `dir` in that frame. */
+function fitStandingLocal(cam: THREE.Vector3, pBot: THREE.Vector3, pTop: THREE.Vector3, halfW: number, aspect: number,
+  lo: number, hi: number, fillW: number, dir: THREE.Vector3): number {
+  const elev = (p: THREE.Vector3): number => {
+    const dx = p.x - cam.x, dy = p.y - cam.y, dz = p.z - cam.z;
+    return Math.atan2(dy, Math.hypot(dx, dz));
+  };
+  const eB = elev(pBot), eT = elev(pTop);
+  const hx = 0.5 * (pBot.x + pTop.x) - cam.x, hz = 0.5 * (pBot.z + pTop.z) - cam.z;
+  const dist = Math.max(1, Math.hypot(hx, hz));
+  let vfov = Math.max(1e-3, eT - eB) / (hi - lo);
+  const hHalf = Math.min(1.45, Math.atan(halfW / dist) / fillW);
+  vfov = Math.max(vfov, 2 * Math.atan(Math.tan(hHalf) / Math.max(0.2, aspect)));
+  const e = eB + (0.5 - lo) * vfov;
+  dir.set((hx / dist) * Math.cos(e), Math.sin(e), (hz / dist) * Math.cos(e));
+  return vfov / RAD;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -836,7 +888,7 @@ export class CinematicRig extends Rig {
   private rel = new THREE.Vector3();
 
   describe(): string {
-    return this.preset === 'ship_orbit' ? 'SHIP LEVEL' : this.preset === 'dolly' ? 'DOLLY' : 'FLYBY';
+    return this.preset === 'ship_orbit' ? 'DECK ORBIT' : this.preset === 'dolly' ? 'DOLLY' : 'FLYBY';
   }
 
   update(view: ViewInfo, inp: RigInput): void {
@@ -849,24 +901,8 @@ export class CinematicRig extends Rig {
     const target = _v3.copy(fr.center);
 
     if (preset === 'ship_orbit') {
-      const ship = snap.bodies.SHIP;
-      const enu = enuAt(ship.pos);
-      const s1 = snap.bodies.S1;
-      const nearShip = s1.pos.distanceTo(ship.pos) < 3000 && s1.status !== 'gone';
-      if (this.fresh) { this.az = Math.atan2(0.8, 0.6); this.t0 = snap.t; }
-      this.az += dtSim * 0.05;
-      const r = 150;
-      view.camWorldPos.copy(ship.pos)
-        .addScaledVector(enu.east, Math.cos(this.az) * r).addScaledVector(enu.north, Math.sin(this.az) * r);
-      const alt = altitudeOf(view.camWorldPos);
-      view.camWorldPos.addScaledVector(enu.up, 7 - alt + 0.6 * noise1(inp.time * 0.4, 3));
-      if (nearShip) bodyFraming(snap, 'S1', this.fr), target.copy(this.fr.center);
-      else target.copy(ship.pos).addScaledVector(enu.up, 18);
-      const dT = _v1.copy(target).sub(view.camWorldPos).normalize();
-      if (this.fresh) this.dir.copy(dT); else this.dir.lerp(dT, expK(dtSim, 0.3)).normalize();
-      const dist = view.camWorldPos.distanceTo(target);
-      const fovT = clamp((2 * Math.atan((L * 1.9) / 2 / dist)) / RAD, 14, 55);
-      this.fov = this.fresh ? fovT : lerp(this.fov, fovT, expK(dtSim, 0.8));
+      this.shipOrbit(view, inp);
+      return;
     } else if (preset === 'dolly') {
       if (this.fresh) {
         this.t0 = snap.t;
@@ -916,6 +952,105 @@ export class CinematicRig extends Rig {
     view.onboard = false;
     this.fresh = false;
   }
+  /**
+   * `ship_orbit`: a slow drone orbit + push-in around the booster standing on the lit deck, the booster ~80% of
+   * the frame height (feet at 16%, top at 95%) (a vertical composition that also fills a 9:16 frame). Driven by the time since touchdown
+   * (seek- and preroll-independent), so a cut at any moment shows the same move. Before touchdown (or with no
+   * booster near the ship) it frames the incoming booster / the ship the same way.
+   */
+  private shipOrbit(view: ViewInfo, inp: RigInput): void {
+    const { snap, dtSim } = inp;
+    const c = devShipOrbit();
+    const ship = snap.bodies.SHIP;
+    const s1 = snap.bodies.S1;
+    const up = upAt(ship.pos, _v2);
+    // ship axes flattened to the horizontal
+    const ax = _v3.set(1, 0, 0).applyQuaternion(ship.quat);
+    ax.addScaledVector(up, -ax.dot(up)).normalize();
+    const az = _v4.crossVectors(ax, up); // +Z (bow) in the horizontal plane
+    const onShip = s1.status !== 'gone' && s1.status !== 'destroyed' && s1.pos.distanceTo(ship.pos) < 400;
+    const td = inp.evT('TOUCHDOWN');
+    if (this.fresh) this.t0 = snap.t;
+    const u = td !== undefined && Number.isFinite(td) && snap.t > td - 30 ? snap.t - td : snap.t - this.t0;
+    const k = smoothstep(0, c.push, u);
+    const a = (c.az0 + c.rate * u) * RAD;
+    const d = lerp(c.d0, c.d1, k);
+    // orbit about the booster's deck spot (the landing point), or the deck centre
+    const anchor = _v5.copy(onShip ? s1.pos : ship.pos);
+    anchor.addScaledVector(up, -_v6.copy(anchor).sub(ship.pos).dot(up));
+    const cam = view.camWorldPos.copy(anchor).addScaledVector(ax, Math.cos(a) * d).addScaledVector(az, Math.sin(a) * d);
+    cam.addScaledVector(upAt(cam, _v6), lerp(c.h0, c.h1, k) - altitudeOf(cam) + 0.35 * noise1(inp.time * 0.3, 3));
+    // subject: the booster from its feet to the top (or, without it, the ship's deck and floods)
+    const pBot = _p1, pTop = _p2;
+    let halfW = 11;
+    if (onShip) {
+      const fr = bodyFraming(snap, 'S1', this.fr);
+      pBot.copy(fr.center).addScaledVector(fr.axis, -0.5 * fr.size - 2);
+      pTop.copy(fr.center).addScaledVector(fr.axis, 0.5 * fr.size);
+    } else {
+      pBot.copy(ship.pos);
+      pTop.copy(ship.pos).addScaledVector(up, 30);
+      halfW = 30;
+    }
+    const aspect = Math.max(0.3, inp.aspect || 16 / 9);
+    // feet a little above the frame bottom (the deck in front, clear of the HUD's lower band), top just inside
+    const fovT = clamp(fitStanding(cam, pBot, pTop, halfW, aspect, c.lo, c.hi, 0.9, _v1), 12, 70);
+    if (this.fresh) this.dir.copy(_v1); else this.dir.lerp(_v1, expK(dtSim, 0.25)).normalize();
+    this.fov = this.fresh ? fovT : lerp(this.fov, fovT, expK(dtSim, 0.5));
+    view.camera.fov = this.fov;
+    lookQuat(this.dir, upAt(cam, _v2), view.camera.quaternion);
+    // drone: a faint hover drift, no roll
+    _q2.setFromEuler(_eul.set(noise1(inp.time * 0.21, 17) * 0.0025, noise1(inp.time * 0.17, 19) * 0.003, 0));
+    view.camera.quaternion.multiply(_q2);
+    view.shake = 0;
+    view.shimmer = 0;
+    view.onboard = false;
+    this.fresh = false;
+  }
+}
+
+/**
+ * Frame a standing subject (segment pBot..pTop, half-width `halfW` m) from `cam`: returns the vertical fov (deg)
+ * that puts its bottom at `lo` and its top at `hi` of the frame height (0 = bottom edge, 1 = top edge), widened
+ * if needed so its width fits `fillW` of the frame width (the binding constraint in portrait frames), and writes
+ * the matching aim direction into `dir`. Angles are measured as elevations from the camera, which is close to
+ * the projected framing for the moderate tilts used here.
+ */
+function fitStanding(cam: THREE.Vector3, pBot: THREE.Vector3, pTop: THREE.Vector3, halfW: number, aspect: number,
+  lo: number, hi: number, fillW: number, dir: THREE.Vector3): number {
+  const up = upAt(cam, _v4);
+  const elev = (p: THREE.Vector3): number => {
+    const d = _v5.copy(p).sub(cam);
+    const v = d.dot(up);
+    return Math.atan2(v, Math.sqrt(Math.max(d.lengthSq() - v * v, 1e-6)));
+  };
+  const eB = elev(pBot), eT = elev(pTop);
+  const h = _v6.copy(pBot).add(pTop).multiplyScalar(0.5).sub(cam);
+  h.addScaledVector(up, -h.dot(up));
+  const dist = Math.max(1, h.length());
+  h.normalize();
+  let vfov = Math.max(1e-3, eT - eB) / (hi - lo);
+  const hHalf = Math.min(1.45, Math.atan(halfW / dist) / fillW);
+  vfov = Math.max(vfov, 2 * Math.atan(Math.tan(hHalf) / Math.max(0.2, aspect)));
+  const e = eB + (0.5 - lo) * vfov;
+  dir.copy(h).multiplyScalar(Math.cos(e)).addScaledVector(up, Math.sin(e));
+  return vfov / RAD;
+}
+
+/** Deck-orbit hero move (cinematic `ship_orbit`), in the ship frame (flattened to the local horizontal, so the
+ * camera hovers like a drone while the ship rolls under it): azimuth `az0` deg from +X (port) toward +Z (bow),
+ * swept by `rate` deg/s, pushing in from `d0` to `d1` m and down from `h0` to `h1` m above the sea over `push` s
+ * from touchdown. 200 deg = starboard-aft: at the default station (bow ~300 deg) it looks WSW, toward the
+ * twilight band, with the moon behind the camera. Dev override: ?shiporbit=az0,rate,d0,d1,h0,h1,push,lo,hi */
+const SHIP_ORBIT = { az0: 196, rate: 1.6, d0: 92, d1: 58, h0: 17, h1: 10, push: 22, lo: 0.16, hi: 0.95 };
+function devShipOrbit(): typeof SHIP_ORBIT {
+  const o = { ...SHIP_ORBIT };
+  if (typeof location === 'undefined') return o;
+  const v = new URLSearchParams(location.search).get('shiporbit');
+  if (!v) return o;
+  const keys = Object.keys(SHIP_ORBIT) as (keyof typeof SHIP_ORBIT)[];
+  v.split(',').map(Number).forEach((x, i) => { if (Number.isFinite(x) && keys[i]) o[keys[i]] = x; });
+  return o;
 }
 
 export function makeRig(mode: CameraMode): Rig {

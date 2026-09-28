@@ -9,3 +9,4 @@ __pycache__/
 .cache/
 .claude/scheduled_tasks.lock
 /video/
+/socials/

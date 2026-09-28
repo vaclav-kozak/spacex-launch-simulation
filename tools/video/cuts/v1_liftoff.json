@@ -1,0 +1,22 @@
+{
+  "about": "9:16 clip: last seconds of the countdown, engine startup, liftoff, climb out.",
+  "query": "tod=twilight&quality=ultra&hud=min&labels=0",
+  "fps": 60,
+  "size": [540, 960],
+  "scale": 4,
+  "css": ".captions { display: none !important; }",
+  "subs": {"style": "vertical"},
+  "fade": [0.15, 0.8],
+  "shots": [
+    {"id": "pad", "cam": "S1:pad:up", "t0": -10.0, "t1": -4.5, "preroll": 2},
+    {"id": "engine", "cam": "S1:pad:engine", "t0": -4.5, "t1": 0.8, "preroll": 2, "in": "cut"},
+    {"id": "liftoff", "cam": "S1:pad:up", "t0": 0.8, "t1": 8.5, "preroll": 5, "in": "cut"},
+    {"id": "climb", "cam": "S1:long_lens", "t0": 13.0, "t1": 18.5, "preroll": 3, "in": "dissolve", "xf": 0.4}
+  ],
+  "cards": [
+    {"shot": "climb", "from": 1.2, "to": 5.5, "title": "spacex.vaclavkozak.com", "tracking": 0.06, "size": 2.1, "y": 0.3, "sub": "Runs live in your browser\nEarth imagery: EOX Sentinel-2 cloudless · NASA"}
+  ],
+  "deliver": [
+    {"file": "socials/video/v1_liftoff.mp4", "preset": "vertical", "subs": true}
+  ]
+}

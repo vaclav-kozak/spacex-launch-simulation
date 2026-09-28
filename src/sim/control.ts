@@ -144,6 +144,9 @@ const FIN_AREA = F9.s1.gridFin.width * F9.s1.gridFin.height;
 const FIN_R = F9.radius + F9.s1.gridFin.width * 0.5;
 const FIN_MAX = (22 * Math.PI) / 180;
 const FIN_RATE = (90 * Math.PI) / 180;
+/** fins reach full travel at this dynamic pressure (Pa); below it the travel scales down to FIN_THIN_FRAC */
+const FIN_Q_FULL = 4000;
+const FIN_THIN_FRAC = 0.25;
 
 export class GridFins {
   deploy = 0;
@@ -167,7 +170,9 @@ export class GridFins {
     achieved.set(0, 0, 0);
     const k = q * FIN_AREA * interp(FIN_CNDELTA, mach) * this.deploy;
     const h = this.finY - cg.y;
-    this.authority = 2.83 * h * k * FIN_MAX;
+    // travel limit grows with q: in near-vacuum the fins can do nothing, so no ±22° bang-bang there
+    const lim = FIN_MAX * Math.min(1, Math.max(FIN_THIN_FRAC, q / FIN_Q_FULL));
+    this.authority = 2.83 * h * k * lim;
     if (k < 1 || this.deploy < 0.98) {
       for (let i = 0; i < 4; i++) this.cmd[i] = 0;
       return;
@@ -176,7 +181,7 @@ export class GridFins {
     for (let i = 0; i < 4; i++) {
       const Ft = (tau.x * FIN_COS[i]) / (2 * h) + (tau.z * FIN_SIN[i]) / (2 * h) - tau.y / (4 * FIN_R);
       let d = Ft / (flowSign * k);
-      d = Math.max(-FIN_MAX, Math.min(FIN_MAX, d));
+      d = Math.max(-lim, Math.min(lim, d));
       this.cmd[i] = d;
       const f = flowSign * k * d;
       ax += f * h * FIN_COS[i];

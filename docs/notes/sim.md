@@ -33,7 +33,11 @@ Test: `npm run simtest` (all scenarios), `npm run simtest -- nominal --trace --c
 * `snapshot.paused / countdownHeld` are refreshed on every `advance()` call, including while paused
   or held. `snapshot.maxWarp`: see *Time warp* below.
 * Deterministic: everything (gusts, waves, ship) is a pure function of settings + time; `seek(t)`
-  forward fast-forwards, backwards rebuilds from T−60.
+  forward fast-forwards, backwards rebuilds from T−60. **Path-independent** since round 5: the clock
+  snaps to exactly T−3 at ignition (envT keeps its offset, rounded to 1 ms) and gusts only start
+  evolving at ignition, so stepping the countdown at 0.02 s, jumping it (`seek(t > −3)`), holding it
+  or `advance(1/60)` from any t0 all give bit-identical flights (before, pad shots and later shots
+  of the video disagreed by up to 1.5 s at touchdown).
 * The nominal pre-sim (places the droneship) runs without gusts; its cache key includes the wind
   (`v2|speed|fromDeg`). `resetNominalCache()` drops it (tuning tools that change `GNC` at runtime).
 * `Simulation.flight` (FlightSim), `nominalMs`, `setAutoFairing(on)` are extra (tests/tools).
@@ -117,7 +121,14 @@ Landing-burn law (identical in the predictor and the 6-DOF): vertical constant d
 Earth-relative below) + a lateral correction 5·e_IP/t_go² from a 4 Hz rollout. The divert is
 **aero-aware**: `lateralSlope()` (thrust + aero side force per rad of tilt) decides the tilt sign
 and size, so at high q the engines tilt away from the target and body lift does the work.
-Below 30 m ZEM/ZEV position hold relative to the moving deck with tilt ≤ 10°→3°.
+Below 30 m ZEM/ZEV position hold relative to the moving deck with tilt ≤ 10°→2° (`tiltFloorDeg`);
+pure velocity damping is blended in over 15 → 5 m (`dampBlend`, no step in the commanded lean).
+Grid-fin travel scales with q (25 % of 22° below ~1 kPa, full at 4 kPa): no ±22° bang-bang in
+near-vacuum after the entry burn.
+**Touchdown settle** (success): the booster rocks about the first foot down onto all four feet
+(damped spring ω 6 rad/s, ζ 0.8, ~0.7 s, ≤ 7.5°/s) while the legs take a few-cm vertical stroke
+(ω 14, ζ 0.7, from the contact descent rate); closed-form in time since contact, exact rest pose
+after 3 s. Replaces the one-step snap upright + 0.45 m drop (was 294°/s, 4000 m/s² on camera).
 Touchdown outcome (feet vs moving deck): centre off deck → `offdeck` (slides off → ocean);
 legs < 0.9 or v_vert > 12 m/s → `hard` + RUD; v_vert > 6 → `hard` (legs crushed, topples);
 tilt > 8°, v_hor > 2 m/s or a foot off the deck → `tipped` (topples, RUD at 84°); else `success`.
@@ -164,14 +175,20 @@ dropped if the count resumes first), `lc_resume` on resume. If lines change late
 | Max-Q | T+1:12.6 · 27.1 kPa (callout T+1:13.6) | ~T+1:10 |
 | MECO | T+2:24.8 · 2.32 km/s inertial · 63 km · fpa 30° · 26 t reserve | ~T+2:27 |
 | stage sep / SES-1 | T+2:27.8 / T+2:34.8 | +3 s / +7 s |
-| fairing sep | T+3:15 (> 110 km, 553 W/m²) | T+3:00–3:30 |
+| fairing sep | T+3:09.8 at 105.7 km (free-molecular heating < 1135 W/m²; altitude floor 102 km) | T+3:00–3:10 |
 | booster apogee | T+4:28 · 130 km | |
-| entry burn | T+6:24.3 at 69.6 km, 20.9 s, cut at 890 m/s, 7.2 t left | ~T+6:20, 55–70 km, 15–25 s |
-| landing burn | T+8:03.5 (1 engine) | ~T+8:05 |
-| touchdown | T+8:26.7 · 1.84 m/s · 0.48 m/s hor · 2.9° · 0.6 m miss · 2.2 t left | ~T+8:30 |
+| entry burn | T+6:24.3–6:45.4 at 69.6 km, 21.1 s, cut at 874 m/s, 7.0 t left | ~T+6:10–6:40, 55–70 km, 15–25 s |
+| landing burn | T+8:04.9 (1 engine), legs T+8:19.3 | ~T+8:00–8:30 |
+| touchdown | T+8:27.8 · 1.81 m/s · 0.54 m/s hor · 2.4° · 0.6 m miss · 2.1 t left, ~580 km downrange | ~T+8:20–8:40, 1–2 m/s, ~600 km |
 | SECO | T+8:58.6 · 215 × 301 km, i 70.2°, 1.4 t S2 residual | T+8:40–8:50 |
 | payload deploy | T+15:51 | T+15–60 min |
 | fairing drogues | T+12:08 / T+12:10 | |
+
+Round 5 shifts (> 0.3 s) vs round 4, for cut lists keyed to mission time. Old values differ by seek
+path: A = shots opened at t0 > −3 (direct seek), B = pad shots (countdown stepped); now one value:
+FAIRING_SEP 194.9 / 194.7 → 189.8 · ENTRY_BURN_START 384.3 / 384.7 → 384.3 · ENTRY_BURN_END
+405.2 / 405.8 → 405.4 · LANDING_BURN_START 483.5 / 485.4 → 484.9 · LEGS_DEPLOY 498.3 / 499.9 → 499.3 ·
+TOUCHDOWN 506.7 / 508.2 → 507.8. Everything up to SES-1 and SECO moved < 0.1 s.
 
 ## Off-nominal outcomes (simtest)
 
@@ -179,12 +196,12 @@ dropped if the count resumes first), `lc_resume` on resume. If lines change late
 |---|---|
 | staging T+60 | S2 separates at 17 kPa, pitched 22° off the airflow → breaks up T+1:03; the 279 t booster can't be held by cold gas → tumbles, breaks up T+1:10 (8 kPa, 59° AoA). MISSION FAILURE |
 | staging T+100 | S2 breaks up T+1:44 (9.4 kPa, 31°); booster (172 t) flips in thick air, tumbles, breaks up broadside T+3:34 (5.4 kPa, 76°). MISSION FAILURE |
-| staging T+130 | S2 stages 15 s early, ~520 m/s slower; it runs dry at T+8:45 suborbital (215 km apogee). Booster (66 t prop) boosts back, entry burn T+6:02–6:35, lands T+8:15 but 3.9 m/s lateral → tips → RUD. MISSION FAILURE |
+| staging T+130 | S2 stages 15 s early, ~520 m/s slower; it runs dry at T+8:45 suborbital (215 km apogee). Booster (66 t prop) boosts back, entry burn T+6:02–6:35, 37 s landing burn misses: soft splashdown 779 m from the ship (round 4: touched down 6.5 m off with 3.9 m/s lateral → tipped; marginal case, flips with tiny gust changes). MISSION FAILURE |
 | staging T+145 | identical to nominal (auto-MECO fires at T+2:24.8 first) |
-| sea 6, wind 15 | landed, 0.9 m/s, 2.4 m miss, 4.9° |
-| sea 6, wind 20 | touchdown 13.3 m off centre with 2.2 m/s lateral on a rolling deck → tips → RUD. PAYLOAD DEPLOYED · BOOSTER LOST |
+| sea 6, wind 15 | landed, 0.9 m/s, 2.9 m miss, 4.5° (rolling deck) |
+| sea 6, wind 20 | landed 11.8 m off centre, 1.5 m/s, 1.7° (round 4: 13.3 m, 2.2 m/s lateral → tipped; marginal) |
 | fairing never | S2 carries the 1.9 t fairing pair to orbit → flameout T+9:03.5 into 186 × 215 km (below target). Booster lands. BOOSTER LANDED · MISSION FAILURE |
-| fairing T+120 | 3.8 kPa, 5.1 MW/m² free-molecular proxy → payload damaged; orbit nominal, booster lands (0.5 m/s, 1.0 m). BOOSTER LANDED · MISSION FAILURE |
+| fairing T+120 | 3.8 kPa, 5.1 MW/m² free-molecular proxy → payload damaged; orbit nominal, booster lands (2.2 m/s, 0.8 m). BOOSTER LANDED · MISSION FAILURE |
 | manual, zero input | ocean impact 266 m/s, 308 m from the ship |
 
 ## Performance

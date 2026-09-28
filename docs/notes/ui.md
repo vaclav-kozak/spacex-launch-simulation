@@ -136,6 +136,27 @@ The semantics follow `docs/notes/sim.md`.
   * Voices (Kokoro-82M, Apache-2.0).
 * **Summary modal.** It repeats the EOX line and adds `Earth imagery: NASA`.
 
+## `?hud=min` (vertical social video, small screens)
+* **What shows.** One top-centre stack (`.minhud` > `.mh-col`): the T± clock (`.mh-clock`, D-DIN Exp 44 px), a hairline with the focused stage's tag (`.mh-tag`, STAGE 1 / STAGE 2), and its speed | altitude around a fixed centre axis (`.mh-read`), so growing numbers never shift the lockup. The big event titles (`.evt-title`) are re-parented under it. Hold / abort / warp notices use `.mh-state`.
+* **Hidden.** The bottom band (gauges, timeline, credit), the control tab, the manual-landing panel and the summary pill. Lower-third captions stay (bottom left); the video tool hides them with `.captions { display: none }` and burns in its own subtitles.
+* **Focused stage.** It is the focus of the largest visible view: S2 for S2 / fairing / payload cameras, S1 for everything else, including the droneship. A tie (the split staging tiles) keeps S1. The numbers snap on a switch.
+* **Safe zone.** `--mz` sizes a 540 × 960 design space: `min(W/540, H/960)` in portrait and `min(W/960, H/800)` in landscape, with a floor of 0.8. In portrait the stack starts at 13.5 % of the height, below the ~12 % app tab bar. It is 300 px wide, and the longest title (SECOND ENGINE START) reaches 82 % of the width, clear of the right ~14 % button column. It stays above the burned-in subtitles (60–75 %). In landscape it starts at 6.5 %.
+* **Legibility.** A layered text-shadow and soft radial scrims behind the lockup and the title (the title's scrim fades with it) keep the type readable over bright plumes without drawing a box.
+* **Camera labels.** They belong to the cameras. Pass `labels=0` for video, or they sit top left in the tab-bar zone.
+* **Credit.** The EOX credit is in the band, so it is hidden here. A video using `hud=min` must credit EOX / NASA in its end card or description.
+
+## Narrow layout (phones in portrait, W < ~740 px)
+* **Zoom.** `--z` is re-derived for a ~460 px design width: `clamp(min(W/460, H/760), 0.74, 1.2)`, which gives 390 → 0.85 and 540 → 1.17. Before, it sat at the 0.74 floor, which left 8 px labels and the clock cut off under a short arc.
+* **Stage telemetry.** Each stage shows as its head plus one line of numbers (`.st-mini`: `7 872 KM/H  69.0 KM`), not gauges. S1 is bottom left, S2 bottom right, above a centred two-line credit footer.
+* **Timeline.** The arc is rounder (`R = 0.94 W`). The block height is set by the clock (clock under the apex at `apexY + 14`). The arc labels only the next 3 events and the ones passed in the last 30 s. The others keep their dots and stay out of the label relaxation. The wide layout is unchanged.
+* **Captions, title and pill.** Captions, title and badge sit above the band. The summary pill moves under the controls tab.
+
+## Video stepping (tools/video)
+* **Fades are CSS.** All HUD fades are CSS transitions / animations, which the tool's `__vt` clock steps.
+* **Clocks.** Title / caption lifetimes count `dtReal` from `frame(dt)`. Caption removal uses `setTimeout` on Playwright's fake clock.
+* **Caption fade-in.** It used to wait for `requestAnimationFrame`. It now forces a style flush and adds `.in` in the same frame.
+* **Verified.** With a 100 ms wall-clock sleep between 1/60 s steps, the title fades over exactly 30 frames (0.5 s), the caption over 21 frames, and the rule grows over 0.9 s.
+
 ## Captions vs. picture-in-picture
 * **Shift.** When a small view sits at the bottom left (a camera PiP: alpha > 0.05, w < 0.45 W, x < 0.3 W), the captions move right of it and shrink slightly. The x offset is PiP right edge + 18 px, converted to design px through `--z`. The narrow layout ignores this.
 * **Layout.** PiPs are currently bottom left (`pipRects`), for example after the S1 landing until SECO+12. They are stacked above the HUD band, so captions and PiP no longer collide.
@@ -160,7 +181,7 @@ The semantics follow `docs/notes/sim.md`.
 ## DOM / layering
 * `#app > .f9ui` has z-index 20 and `pointer-events: none`, except on its controls.
 * The bottom ~250 px × `--z` is the webcast band. The top right holds the control tab. The top left of each viewport is free for the cameras' labels.
-* `?hud=0` hides the whole layer; input handling still works.
+* `?hud=0` hides the whole layer; input handling still works. `?hud=min` shows only the minimal overlay (see above).
 
 ## Requests
 1. **sim:** done in 4b8799d: `lc_holding` on the env clock, timely `MAX_Q`, and a tighter manual lean cap near the deck. The HUD's 30 s staleness allowance stays as a safety net.

@@ -36,6 +36,9 @@ const TAU = 42; // s
 const WINDOW = 700; // s mapped to the arc end
 /** done markers older than this lose their label (dot stays) */
 const OLD_LABEL_AGE = 200; // s
+/** narrow (phone portrait) arc: fewer labels so the short arc stays legible */
+const NARROW_OLD_LABEL_AGE = 30; // s
+const NARROW_NEXT_LABELS = 3;
 
 export class Timeline {
   readonly el: HTMLDivElement;
@@ -62,6 +65,7 @@ export class Timeline {
   private half = 28; // deg
   private frame = 0;
   private lastWarp = 1;
+  private narrow = false;
 
   constructor() {
     const defs = s('defs', {},
@@ -89,16 +93,19 @@ export class Timeline {
     this.layout(760);
   }
 
-  /** width of the timeline block in design px */
-  layout(W: number): void {
+  /** width of the timeline block in design px; narrow: phone portrait (rounder arc, the clock block
+   * sets the height, fewer labels) */
+  layout(W: number, narrow = false): void {
     this.W = W;
-    this.R = W * 1.08;
+    this.narrow = narrow;
+    this.R = W * (narrow ? 0.94 : 1.08);
     this.cx = W / 2;
     this.half = (Math.asin((W / 2 - 6) / this.R) * 180) / Math.PI;
     const sag = this.R * (1 - Math.cos((this.half * Math.PI) / 180));
-    this.apexY = 104;
+    this.apexY = narrow ? 94 : 104;
     this.cy = this.apexY + this.R;
-    const H = Math.ceil(this.apexY + sag + 8);
+    // narrow: clock (top: apexY + 14, see .narrow .tl-center) + mission + state line must fit above the stage rows
+    const H = Math.ceil(narrow ? Math.max(this.apexY + sag + 8, this.apexY + 14 + 70) : this.apexY + sag + 8);
     setAttr(this.svg, 'viewBox', `0 0 ${W} ${H}`);
     this.svg.setAttribute('width', String(W));
     this.svg.setAttribute('height', String(H));
@@ -183,13 +190,23 @@ export class Timeline {
 
     // 1-D label relaxation so close events (MECO / STAGE SEP / SES-1) fan out instead of overlapping
     items.sort((p, q) => p.a - q.a);
+    // narrow: label only the next few events and the ones just passed (the others keep their dots
+    // and stay out of the relaxation); wide: every marker takes part, long-past labels just fade
+    const oldAge = this.narrow ? NARROW_OLD_LABEL_AGE : OLD_LABEL_AGE;
+    let upcoming = 0;
+    const noLabel = new Set<MarkerEl>();
+    for (const it of items) {
+      if (it.m.done && t - it.m.t > oldAge) noLabel.add(it.me);
+      else if (!it.m.done && !it.m.cancelled && ++upcoming > NARROW_NEXT_LABELS && this.narrow) noLabel.add(it.me);
+    }
+    const labeled = this.narrow ? items.filter((it) => !noLabel.has(it.me)) : items;
     const labelR = this.R + 13;
     const gap = (16 / labelR) * (180 / Math.PI);
     const maxNudge = 9;
     for (let it = 0; it < 80; it++) {
       let moved = false;
-      for (let i = 0; i + 1 < items.length; i++) {
-        const p = items[i], q = items[i + 1];
+      for (let i = 0; i + 1 < labeled.length; i++) {
+        const p = labeled[i], q = labeled[i + 1];
         const d = q.la - p.la;
         if (d < gap) {
           const push = (gap - d) / 2 + 1e-4;
@@ -234,7 +251,7 @@ export class Timeline {
       toggleClass(me.g, 'cancelled', !!m.cancelled && !m.done);
       toggleClass(me.g, 'near', !m.done && !m.cancelled && m.t - t < 12 && m.t - t > -2);
       // long-past events bunch up at the left end: keep their dots, drop the labels
-      toggleClass(me.g, 'old', m.done && t - m.t > OLD_LABEL_AGE);
+      toggleClass(me.g, 'old', noLabel.has(me));
     }
   }
 }

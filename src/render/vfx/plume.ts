@@ -885,8 +885,9 @@ void field(vec3 p, int mode, out vec3 em, out float sigT, out float sigS) {
     float shell = exp(-pow((edgeO - 0.9) / shw, 2.0)) / (1.0 + 0.9 * uFar);
     // (MECO remnant: fine radial striations in the condensed shell. A long lens from the ground sees
     //  a ~km patch of the km-sized shell, which the plume-scale streamers alone left flat grey)
-    // (far field: half the contrast -- a few px apart they only alias into hair)
-    if (uRem.x > 0.5) shell *= mix(0.25 + 1.6 * smoothstep(0.3, 0.72, n3(vec3(dir * 6.5 + 3.1, lg * 1.4 + 0.6))), 1.0, 0.5 * uFar);
+    // (far field: faded out -- a few px apart they only alias into hair; at half contrast the twilight
+    //  coast shot still drew the remnant as a hairy white leaf instead of a soft sunlit dome)
+    if (uRem.x > 0.5) shell *= mix(0.25 + 1.6 * smoothstep(0.3, 0.72, n3(vec3(dir * 6.5 + 3.1, lg * 1.4 + 0.6))), 1.0, uFar);
     // (the faint interior fill only builds up well downstream: near the vehicle the bell is still
     //  narrow, so a 1/R^2 fill there turned a camera sitting inside it (chase at 60 km) into fog;
     //  the membrane stays clear through the middle, tau ~0.05-0.2 end-on)
@@ -939,7 +940,9 @@ void field(vec3 p, int mode, out vec3 em, out float sigT, out float sigS) {
         float fl = sp - uTime * 140.0;            // streams aft
         float nA = n3(vec3(dir * 0.3, fl / 60.0 + uTime * 0.21));
         float nB = n3(vec3(dir * 1.25 + 1.7, fl / 34.0 + r / 30.0)); // flow-aligned streaks
-        float nC = n3(vec3(q / 2.4 + 0.3, fl / 5.5 + uTime * 0.9));
+        // (billow scale ~2 m: the sub-march steps ~1 m through the cushion, and the old 0.6 m cells
+        //  aliased into a regular IGN dot mesh over the whole bright fan at 4K)
+        float nC = n3(vec3(q / 7.2 + 0.3, fl / 16.0 + uTime * 0.9));
         // (flow-aligned streaks kept secondary: billowy breakup reads less like a radial starburst)
         float tt = nA * 0.5 + nB * 0.2 + nC * 0.3;
         float u = sp / Lc;

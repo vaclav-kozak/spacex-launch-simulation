@@ -106,8 +106,9 @@ export const LANDING_PROFILE = {
   q0: 4_000, q1: 8_000,
   /** IP-correction gain (a = k·e/tgo²) and max tilt from the gravity-turn direction (deg) */
   kIp: 5, ipTiltDeg: 10,
-  /** final descent: ZEM/ZEV min time-to-go (s), max tilt (deg), velocity damping below H1 (1/s) */
-  tgMin: 5, finalTiltDeg: 10, kVel: 0.5,
+  /** final descent: ZEM/ZEV min time-to-go (s), max tilt (deg) tapering to tiltFloorDeg at the deck,
+   *  velocity damping (1/s) blended in over dampBlend (m) above H1 */
+  tgMin: 5, finalTiltDeg: 10, tiltFloorDeg: 2, kVel: 0.5, dampBlend: 10,
 };
 export interface LandingProfileOut { aReq: number; finalSeg: boolean; w: number }
 /** h: feet above the deck, V: Earth-relative speed, q: dynamic pressure. w = weight of the air-relative

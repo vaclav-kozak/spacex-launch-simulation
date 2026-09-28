@@ -1,0 +1,29 @@
+{
+  "about": "9:16 clip: the whole mission in ~45 s, reusing the takes of the other vertical clips.",
+  "query": "tod=twilight&quality=ultra&hud=min&labels=0",
+  "fps": 60,
+  "size": [540, 960],
+  "scale": 4,
+  "css": ".captions { display: none !important; }",
+  "subs": {"style": "vertical"},
+  "fade": [0.15, 0.8],
+  "shots": [
+    {"id": "v1_liftoff_pad", "take": "v1_liftoff/pad", "cam": "S1:pad:up", "t0": -7.0, "t1": -4.5},
+    {"id": "v1_liftoff_engine", "take": "v1_liftoff/engine", "cam": "S1:pad:engine", "t0": -4.5, "t1": 0.8, "in": "cut"},
+    {"id": "v1_liftoff_liftoff", "take": "v1_liftoff/liftoff", "cam": "S1:pad:up", "t0": 0.8, "t1": 5.5, "in": "cut"},
+    {"id": "v1_liftoff_climb", "take": "v1_liftoff/climb", "cam": "S1:long_lens", "t0": 13.0, "t1": 16.0, "in": "dissolve", "xf": 0.3},
+    {"id": "v2_staging_staging", "take": "v2_staging/staging", "cam": "S1:chase", "t0": 146.5, "t1": 151.0, "split": true, "in": "dissolve", "xf": 0.3},
+    {"id": "v2_staging_jellyfish", "take": "v2_staging/jellyfish", "cam": "S1:long_lens:twilight", "t0": 151.0, "t1": 156.0, "in": "cut"},
+    {"id": "v5_onboard_mvac", "take": "v5_onboard/mvac", "cam": "S2:onboard_engine", "t0": 166.0, "t1": 169.5, "in": "cut"},
+    {"id": "v3_landing_entry", "take": "v3_landing/entry", "cam": "S1:chase", "t0": 386.0, "t1": 390.0, "in": "dissolve", "xf": 0.3},
+    {"id": "v3_landing_burn", "take": "v3_landing/burn", "cam": "S1:onboard_down", "t0": 487.0, "t1": 490.5, "in": "dissolve", "xf": 0.3},
+    {"id": "v3_landing_touchdown", "take": "v3_landing/touchdown", "cam": "SHIP:deck", "t0": 503.5, "t1": 510.5, "in": "cut"},
+    {"id": "v3_landing_deck", "take": "v3_landing/deck", "cam": "S1:cinematic:ship_orbit", "t0": 511.0, "t1": 515.5, "in": "dissolve", "xf": 0.4}
+  ],
+  "cards": [
+    {"shot": "v3_landing_deck", "from": 0.6, "to": 4.5, "title": "spacex.vaclavkozak.com", "tracking": 0.06, "size": 2.1, "y": 0.3, "sub": "Runs live in your browser\nEarth imagery: EOX Sentinel-2 cloudless · NASA"}
+  ],
+  "deliver": [
+    {"file": "socials/video/v4_full_mission.mp4", "preset": "vertical", "subs": true}
+  ]
+}

@@ -97,7 +97,7 @@ export const GNC = {
   /** free-molecular heating limit for fairing jettison (W/m²) */
   fairingHeatLimit: 1135,
   fairingMinDelay: 15,
-  fairingMinAlt: 110_000,
+  fairingMinAlt: 102_000,
   // ---- S2 ----
   /** S2 insertion: perigee (insertion) altitude and apogee altitude of the parking orbit */
   insertAlt: 215_000,

@@ -69,8 +69,10 @@ export class PadEmitter {
       s.life = 140 + 90 * R(); s.tau = 42; s.fadeIn = 0.25;
       s.drag = 2.2 + R(); s.buoy = 2.2 + 1.5 * R(); s.buoyTau = 30;
       const w = 0.92 - 0.05 * R();
-      // (the fuel-rich start only greys the very first puffs a little; the cloud is deluge steam)
-      s.r = w - early * 0.14; s.g = w - early * 0.16; s.b = w + 0.02 - early * 0.2;
+      // (the fuel-rich start only greys the very first puffs a little; the cloud is deluge steam,
+      //  with some tan-grey RP-1 exhaust mixed through so the billows aren't one flat white)
+      const tan = R() < 0.35 ? 0.1 + 0.08 * R() : 0;
+      s.r = w - early * 0.14 - tan * 0.6; s.g = w - early * 0.16 - tan; s.b = w + 0.02 - early * 0.2 - tan * 1.6;
       // (emission kept low: glowing steam puffs out-shone the smoke's plume light at night)
       s.temp = early > 0.3 || R() < 0.25 ? 1500 + 500 * R() : 0; s.tempTau = 0.35; s.emis = 2.5;
       s.variant = (R() * 4) | 0; s.turb = 2.5; s.flags = P_GROUND | P_PADGRID; s.spin = RS() * 0.05; s.prio = 3;
@@ -124,7 +126,8 @@ export class PadEmitter {
       s.size0 = 4 + 3 * R(); s.size1 = 24 + 16 * R(); s.sizeTau = 8; s.sizeDiff = 1.1;
       s.life = 120 + 80 * R(); s.tau = 34; s.fadeIn = 0.3;
       s.drag = 2.4; s.buoy = 1.8; s.buoyTau = 30;
-      s.r = 0.88; s.g = 0.87; s.b = 0.86;
+      const tan = R() < 0.3 ? 0.08 + 0.06 * R() : 0;
+      s.r = 0.88 - tan * 0.6; s.g = 0.87 - tan; s.b = 0.86 - tan * 1.6;
       s.temp = hN < 60 && R() < 0.3 ? 1700 : 0; s.tempTau = 0.3; s.emis = 3;
       s.variant = (R() * 4) | 0; s.turb = 2; s.flags = P_GROUND | P_PADGRID; s.spin = RS() * 0.05; s.prio = 3;
       s.level = -1;
@@ -151,7 +154,11 @@ export class TrailEmitter {
     const alt = b.altitude;
     const retro = sh.retro;
     // spawn point: tail of the luminous plume (or the retro shell)
-    const dSpawn = retro > 0.3 ? -Math.min(sh.standoff * 0.3, 20) : Math.min(sh.L * 0.55, 36 + sh.L * 0.25);
+    let dSpawn = retro > 0.3 ? -Math.min(sh.standoff * 0.3, 20) : Math.min(sh.L * 0.55, 36 + sh.L * 0.25);
+    // landing burn over the deck: the exhaust hits the deck instead of trailing (LandingEmitter spreads it),
+    // so the trail thins out low down (its long-lived puffs hung over the landed booster as a brown haze)
+    const deckK = b.phase === 'LANDING_BURN' && sh.planeDist < Infinity ? smooth(12, 70, sh.planeDist) : 1;
+    if (deckK < 1) dSpawn = Math.min(dSpawn, sh.planeDist * 0.5);
     const Rt = retro > 0.3 ? sh.standoff * 0.7 + sh.Rc * 2 : plumeRadiusAt(sh, dSpawn);
     const px = origin.x + exhaustDir.x * dSpawn, py = origin.y + exhaustDir.y * dSpawn, pz = origin.z + exhaustDir.z * dSpawn;
     if (!this.has) { this.last.set(px, py, pz); this.has = true; return; }
@@ -192,7 +199,7 @@ export class TrailEmitter {
       const thin = 1 - low;
       // (above ~30 km the km-wide trail is tenuous: faint in daylight, a glowing veil only at
       //  twilight; long lenses look along it through dozens of overlapping puffs)
-      s.tau = (low * (1.5 + 1.8 * contrail) + thin * 0.25 * (1 - 0.985 * smooth(26000, 62000, alt))) * Math.min(1, Math.sqrt(sh.mass / 9) + 0.25) * (retro > 0.3 ? 0.6 : 1);
+      s.tau = (low * (1.5 + 1.8 * contrail) + thin * 0.25 * (1 - 0.985 * smooth(26000, 62000, alt))) * Math.min(1, Math.sqrt(sh.mass / 9) + 0.25) * (retro > 0.3 ? 0.6 : 1) * (0.25 + 0.75 * deckK);
       s.fadeIn = low > 0.5 ? 0.8 : 1.5;
       s.drag = retro > 0.3 ? 0.03 : low > 0.5 ? 2.5 : 1.5;
       s.buoy = 0.4 * low; s.buoyTau = 30;
@@ -415,7 +422,7 @@ export class LandingEmitter {
       // steam / smoke boiling off the wet deck
       // (dense and continuous: the wall jet piles a boiling cloud onto the deck that engulfs the
       //  legs and octaweb, then rolls off the edges)
-      this.acc.steam += dt * 75 * q * I;
+      this.acc.steam += dt * 60 * q * I;
       while (this.acc.steam >= 1) {
         this.acc.steam -= 1;
         const a = R() * Math.PI * 2;
@@ -425,10 +432,11 @@ export class LandingEmitter {
         const r0 = 2 + 5 * R();
         s.x = hx + dx * r0 + U.x * 0.8; s.y = hy + dy * r0 + U.y * 0.8; s.z = hz + dz * r0 + U.z * 0.8;
         s.vx = dx * sp + U.x * 2 * R(); s.vy = dy * sp + U.y * 2 * R(); s.vz = dz * sp + U.z * 2 * R();
-        // (translucent and short-lived: the sea wind strips it off the deck within ~5-8 s, so the
-        //  booster stays partly visible through it and reads clearly soon after touchdown)
-        s.size0 = 1.5 + 1.5 * R(); s.size1 = 10 + 10 * R(); s.sizeTau = 1.4; s.sizeDiff = 1.6;
-        s.life = 4 + 4 * R(); s.tau = 4.5; s.fadeIn = 0.08;
+        // (translucent and short-lived: the sea wind strips it off the deck within ~3-5 s, so the
+        //  booster stays visible through it and reads clearly soon after touchdown; at tau 4.5 and
+        //  4-8 s it piled into a plume-lit orange wall filling the deck cam)
+        s.size0 = 1.5 + 1.5 * R(); s.size1 = 9 + 9 * R(); s.sizeTau = 1.4; s.sizeDiff = 1.6;
+        s.life = 2.8 + 2.6 * R(); s.tau = 2.4; s.fadeIn = 0.08;
         s.drag = 0.7; s.buoy = 1.4; s.buoyTau = 6;
         s.r = 0.93; s.g = 0.93; s.b = 0.93;
         s.temp = R() < 0.15 ? 1600 : 0; s.tempTau = 0.25; s.emis = 4;
@@ -437,7 +445,7 @@ export class LandingEmitter {
         ps.emit();
       }
       // sea spray thrown off the deck edges once the flow reaches them
-      this.acc.spray += dt * 110 * q * smooth(0.25, 0.8, I);
+      this.acc.spray += dt * 40 * q * smooth(0.25, 0.8, I);
       while (this.acc.spray >= 1) {
         this.acc.spray -= 1;
         const edgeX = R() < 0.5;
@@ -449,12 +457,14 @@ export class LandingEmitter {
         const oz = deck.pos.z + deck.right.z * sx + deck.fwd.z * sz;
         const ddx = ox - hx, ddy = oy - hy, ddz = oz - hz;
         const dl = Math.hypot(ddx, ddy, ddz) + 1e-3;
-        // curtain of spray + steam rolling off the deck edges (continuous: many overlapping puffs)
+        // spray + steam rolling off the deck edges and falling toward the sea
+        // (thin and brief: at 110/s, tau 2.2 and 5-9 s it built a wall around the deck that filled the
+        //  deck cam, which sits at the deck edge)
         const sp = 7 + 14 * R();
         s.x = ox + U.x * 1.5; s.y = oy + U.y * 1.5; s.z = oz + U.z * 1.5;
-        s.vx = (ddx / dl) * sp + U.x * (5 * R() - 1.5); s.vy = (ddy / dl) * sp + U.y * (5 * R() - 1.5); s.vz = (ddz / dl) * sp + U.z * (5 * R() - 1.5);
-        s.size0 = 4 + 2 * R(); s.size1 = 13 + 9 * R(); s.sizeTau = 1.8; s.sizeDiff = 0.8;
-        s.life = 5 + 4 * R(); s.tau = 2.2; s.fadeIn = 0.12;
+        s.vx = (ddx / dl) * sp + U.x * (3 * R() - 3); s.vy = (ddy / dl) * sp + U.y * (3 * R() - 3); s.vz = (ddz / dl) * sp + U.z * (3 * R() - 3);
+        s.size0 = 3 + 2 * R(); s.size1 = 10 + 7 * R(); s.sizeTau = 1.8; s.sizeDiff = 0.8;
+        s.life = 3 + 2.5 * R(); s.tau = 1.2; s.fadeIn = 0.12;
         s.drag = 0.9; s.buoy = 0.8; s.buoyTau = 4;
         s.r = 0.92; s.g = 0.94; s.b = 0.96;
         s.temp = 0; s.emis = 0;
@@ -492,9 +502,9 @@ export class LandingEmitter {
     if (!landed && t < this.touchdownT) this.touchdownT = -Infinity; // time jumped back
     if (this.touchdownT > -Infinity && thrustFrac < 0.05) {
       const age = t - this.touchdownT;
-      // (stops after ~10 s: a lone late puff read as a cotton ball on the clear deck)
-      const k = age < 10 ? Math.exp(-age / 3.5) : 0;
-      this.acc.linger += dt * 6 * q * k;
+      // (stops after ~12 s: a lone late puff read as a cotton ball on the clear deck)
+      const k = age < 12 ? Math.exp(-age / 4.5) : 0;
+      this.acc.linger += dt * 9 * q * k;
       while (this.acc.linger >= 1) {
         this.acc.linger -= 1;
         const a = R() * Math.PI * 2, rr = 1 + 9 * R();

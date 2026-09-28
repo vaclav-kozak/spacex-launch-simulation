@@ -7,12 +7,13 @@ import { MVAC_T } from './materials';
 /**
  * Thermal model of the radiatively cooled niobium extension (hottest band, K). Seek-safe: a pure
  * function of mission time, the MVac ignition time and the SECO marker.
- *  - burn: first-order approach to the steady state (tau 7 s -> dull red after ~6 s, orange by ~15 s,
- *    full by ~30 s); the steady state scales with throttle^0.25 (T ~ q^1/4, q ~ chamber pressure)
+ *  - burn: first-order approach to the steady state (tau 4.5 s: a ~1 mm radiatively cooled niobium sheet,
+ *    rho c d / (8 eps sigma T^3) ~ 4-5 s -> dull red after ~3 s, orange by ~7 s, bright by ~12 s); the steady
+ *    state scales with throttle^0.25 (T ~ q^1/4, q ~ chamber pressure)
  *  - after cutoff: thin radiating sheet, dT/dt = -a T^4  =>  T = (T0^-3 + 3 a t)^(-1/3)
  *    (1480 K -> ~1000 K in 12 s, below visible ~800 K after ~30 s)
  */
-const TAU_HEAT = 7;
+const TAU_HEAT = 4.5;
 const RAD_A = 2.0e-11;
 
 function heatUp(tOn: number, thr: number): number {

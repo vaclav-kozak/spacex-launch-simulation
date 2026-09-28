@@ -68,15 +68,26 @@ export const MVAC_T = {
   hot: 1480,
   /** steady-state profile along the bell (K) */
   ss(v: number): number {
-    // hottest ~8 cm below the joint (the manifold flange sinks heat), radiating fin cools to ~950 K at the lip
-    return (1480 - 530 * Math.pow(v, 1.1)) * (1 - 0.09 * Math.exp(-v / 0.03));
+    // hottest ~8 cm below the joint (the manifold flange sinks heat), radiating fin cools to ~1080 K at the lip
+    // (engine-cam footage: the exit rim still glows a dull cherry red at full thrust)
+    return (1480 - 400 * Math.pow(v, 1.1)) * (1 - 0.09 * Math.exp(-v / 0.03));
   },
 };
 
 const GLOW_N = 128;
-/** reference luminance (hot band at steady state) and display mapping */
-const GLOW_PEAK = 0.35; // emissive radiance of the hottest band (lighting units; see models.md: 4..20 blows out through AgX)
-const GLOW_GAMMA = 0.8; // camera response: silicon + log encoding compress the Wien slope
+/** Display mapping of the extension glow: radiance = GLOW_PEAK (L/Lref)^GLOW_GAMMA, Lref = the hot band at
+ *  steady state. (Round 5) Engine-cam look of the real S2 webcasts: the upper extension glows bright
+ *  yellow-orange, fading through orange to a dull cherry red at the exit. The camera sees the glow through a
+ *  red / near-IR-leaky response, so L follows Wien at an effective 0.75 um (GLOW_KCAM = c2 / lambda) instead
+ *  of the much steeper photopic luminance (the round-4 GLOW_PEAK 0.35 with photopic L was physically "right"
+ *  for the eye and read as a flat grey sunlit bell). At the engine cam's anchored exposure (x ~3) the hot
+ *  band lands ~2.5 stops over mid grey (AgX: pale yellow-orange), mid-bell ~0.8 (saturated orange) and the
+ *  lip ~0.05 (dim red); AgX turns anything much brighter into a peach ball, so the ARCHITECTURE 4..20
+ *  "hot nozzle" band is only right for the throat. See also setMvacTemperature (reflection fade). */
+const GLOW_PEAK = 1.8;
+const GLOW_GAMMA = 1.0;
+const GLOW_KCAM = 14388 / 0.75; // c2 / lambda_eff (K)
+const camLum = (T: number) => Math.exp(-GLOW_KCAM / Math.max(T, 1));
 
 /**
  * Light from the firing engine on the INSIDE of the nozzle, looking up into the bell: the throat window onto
@@ -112,7 +123,7 @@ class MvacGlowRamp {
     let mx = 0;
     for (let i = 0; i < GLOW_N; i++) mx = Math.max(mx, MVAC_T.ss((i + 0.5) / GLOW_N));
     for (let i = 0; i < GLOW_N; i++) this.prof[i] = (MVAC_T.ss((i + 0.5) / GLOW_N) - amb) / (mx - amb);
-    this.lumRef = blackbody(hot, this.c);
+    this.lumRef = camLum(hot);
     this.tex = new THREE.DataTexture(this.data, 1, GLOW_N, THREE.RGBAFormat, THREE.HalfFloatType);
     this.tex.colorSpace = THREE.NoColorSpace;
     this.tex.magFilter = THREE.LinearFilter;
@@ -137,7 +148,8 @@ class MvacGlowRamp {
       let I = 0;
       this.c.setRGB(0, 0, 0);
       if (T > 700) {
-        const L = blackbody(T, this.c) / this.lumRef;
+        blackbody(T, this.c);
+        const L = camLum(T) / this.lumRef;
         // fade the last (invisible) few hundred K smoothly to black
         const k = Math.min(1, (T - 700) / 180);
         I = GLOW_PEAK * Math.pow(L, GLOW_GAMMA) * k * k;
@@ -242,6 +254,8 @@ export class VehicleMaterials {
   /** dull orange-red of ~1100-1200 K steel/Inconel seen by a camera (S1 base heating) */
   readonly heatColor = new THREE.Color(1.0, 0.24, 0.045);
   private mvacRamp = new MvacGlowRamp();
+  /** sun / sky reflection scale of the extension while it glows (see setMvacTemperature) */
+  private mvacRefl = { value: 1 };
   /** inside of the extension: its own glow + the throat's light near the joint */
   private mvacRampIn = new MvacGlowRamp(true, MVAC_GAS.ext);
   /** inside of the regen section + throat disc (v = joint .. throat): engine light only */
@@ -319,14 +333,24 @@ export class VehicleMaterials {
     // varied with height only and the sunlit bell showed horizontal specular rings.)
     const extAlb = tex('mvac_ext_albedo.jpg', { srgb: true });
     const extRough = tex('mvac_ext_rough.jpg');
-    std('MVac_Ext', {
+    const ext = std('MVac_Ext', {
       map: extAlb, color: lin(0x232326).multiplyScalar(1.25), roughness: 1, metalness: 0.35, roughnessMap: extRough,
       emissive: new THREE.Color(1, 1, 1), emissiveIntensity: 0, emissiveMap: this.mvacRamp.tex,
     });
-    std('MVac_ExtInner', {
+    const extIn = std('MVac_ExtInner', {
       map: extAlb, color: lin(0x161616).multiplyScalar(1.25), roughness: 0.85, metalness: 0.3, roughnessMap: extRough,
       emissive: new THREE.Color(1, 1, 1), emissiveIntensity: 0, emissiveMap: this.mvacRampIn.tex,
     });
+    // reflected-light scale while glowing (setMvacTemperature): one shared uniform, survives clones
+    const refl = this.mvacRefl;
+    ext.onBeforeCompile = extIn.onBeforeCompile = (sh) => {
+      sh.uniforms.uReflK = refl;
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <common>', '#include <common>\nuniform float uReflK;')
+        .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
+  reflectedLight.directDiffuse *= uReflK; reflectedLight.directSpecular *= uReflK;
+  reflectedLight.indirectDiffuse *= uReflK; reflectedLight.indirectSpecular *= uReflK;`);
+    };
     // inside of the regen section and the throat disc (runtime geometry, secondStage.ts addRegenInner):
     // sooty copper, lit by the engine; drawn BackSide so its outward-facing lathe never shows through the
     // outer regen skin 12 mm away
@@ -438,6 +462,12 @@ export class VehicleMaterials {
     this.mvacRampIn.set(Thot, gas);
     this.mvacRampRegen.set(Thot, gas);
     const on = Thot > 700 ? 1 : 0;
+    // The real engine cam's auto exposure follows the glowing skirt; the anchored onboard meter here keeps
+    // exposing for the sunlit hardware, where a grey sun sheen (mostly the rough coating's grazing specular)
+    // on the glowing bell turned the blackbody orange salmon through AgX. Fade the extension's reflected
+    // sun / sky light to 15% as the hot band passes ~800 -> 1350 K (and back while it cools after SECO).
+    const h = Math.max(0, Math.min(1, (Thot - 800) / 550));
+    this.mvacRefl.value = 1 - 0.85 * h * h * (3 - 2 * h);
     this.m['MVac_Ext'].emissiveIntensity = on;
     this.m['MVac_ExtInner'].emissiveIntensity = on || gas > 0.002 ? 1 : 0;
     this.m['MVac_RegenInner'].emissiveIntensity = gas > 0.002 ? 1 : 0;

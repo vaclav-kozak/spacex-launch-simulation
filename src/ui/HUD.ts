@@ -10,6 +10,7 @@ import { Timeline } from './Timeline';
 import { Captions } from './Captions';
 import { Controls, WARP_LEVELS, type ControlState } from './Controls';
 import { ManualHud } from './ManualHud';
+import { MinHud } from './MinHud';
 import { HelpOverlay, PhotoPanel, SoundPrompt, SummaryModal } from './Overlays';
 import { clamp, fmtClock, h, isTypingTarget, setText, toggleClass } from './util';
 import './fonts.css';
@@ -52,6 +53,8 @@ export class HUD {
   private badgeSub: HTMLSpanElement;
   private sumPill: HTMLButtonElement;
   private readonly hidden: boolean;
+  /** `?hud=min`: clock + focused-stage readout + event titles only (vertical social video, small screens) */
+  private readonly min: MinHud | null;
 
   private snap: SimSnapshot | null = null;
   private pending: SimEvent[] = [];
@@ -82,6 +85,7 @@ export class HUD {
   constructor(private ctx: AppContext, private actions: AppActions, domRoot: HTMLElement) {
     const params = new URLSearchParams(location.search);
     this.hidden = params.get('hud') === '0';
+    this.min = params.get('hud') === 'min' ? new MinHud() : null;
 
     this.s1 = new StageTelemetry('left', 9, 10000, 150);
     this.s2 = new StageTelemetry('right', 1, 30000, 400);
@@ -115,9 +119,14 @@ export class HUD {
     this.sumPill.addEventListener('mousedown', (e) => e.preventDefault());
     this.sumPill.addEventListener('click', () => this.openSummary());
 
-    this.root = h('div', { class: 'f9ui' + (this.hidden ? ' hud-off' : '') },
+    this.root = h('div', { class: 'f9ui' + (this.hidden ? ' hud-off' : '') + (this.min ? ' hud-min' : '') },
       this.band, this.captions.el, this.captions.titleEl, this.manual.panel,
       this.badge, this.sumPill, this.controls.el, this.photo.el, this.sound.el, this.summary.el, this.help.el);
+    if (this.min) {
+      // the event titles stack under the clock lockup
+      this.min.col.append(this.captions.titleEl);
+      this.root.prepend(this.min.el);
+    }
     domRoot.appendChild(this.root);
 
     // first interaction anywhere unlocks audio (autoplay policy)
@@ -390,16 +399,24 @@ export class HUD {
   private layout(): void {
     const W = this.ctx.width || window.innerWidth, H = this.ctx.height || window.innerHeight;
     this.lastW = W; this.lastH = H;
-    const z = clamp(Math.min(W / 1600, H / 900), 0.74, 1.5);
+    let z = clamp(Math.min(W / 1600, H / 900), 0.74, 1.5);
+    const narrow = W / z < 1000;
+    // phones in portrait: size the band for a ~460 px design width (390 → 0.85, 540 → 1.17) so the
+    // type stays legible instead of sitting at the 0.74 floor
+    if (narrow) z = clamp(Math.min(W / 460, H / 760), 0.74, 1.2);
     this.root.style.setProperty('--z', z.toFixed(4));
     const dw = W / z; // design width
-    const narrow = dw < 1000;
     const compact = !narrow && dw < 1260;
     toggleClass(this.root, 'narrow', narrow);
     toggleClass(this.root, 'compact', compact);
     const stageW = narrow ? 0 : compact ? 250 : 356;
-    const tlW = clamp(dw - 2 * stageW - 40, 360, 780);
-    this.timeline.layout(Math.round(tlW));
+    const tlW = narrow ? clamp(dw - 24, 300, 620) : clamp(dw - 2 * stageW - 40, 360, 780);
+    this.timeline.layout(Math.round(tlW), narrow);
+    // hud=min: a 540 × 960 design space in portrait, ~960 × 800 in landscape
+    const portrait = H >= W;
+    const mz = portrait ? Math.min(W / 540, H / 960) : Math.min(W / 960, H / 800);
+    this.root.style.setProperty('--mz', clamp(mz, 0.8, 3).toFixed(4));
+    toggleClass(this.root, 'portrait', portrait);
   }
 
   // ------------------------------------------------------------------ frame
@@ -483,14 +500,17 @@ export class HUD {
       lost: b.S2.status === 'destroyed' || b.S2.status === 'gone',
     };
     if (!this.hidden) {
-      this.s1.update(s1View, dtReal);
-      this.s2.update(s2View, dtReal);
       let state = '', alert = false;
       if (abortState) { state = 'ABORT  ·  RECYCLING TO T−60'; alert = true; }
       else if (held) state = 'COUNTDOWN HOLD';
       else if (this.realNow < this.flashUntil) state = this.flashText;
-      this.timeline.update(snap, { held: held && !abortState, alert, state, paused: snap.paused, warp: snap.warp });
-      this.placeCaptions(views);
+      if (this.min) this.min.update(snap, views, { held: held && !abortState, alert, state }, dtReal);
+      else {
+        this.s1.update(s1View, dtReal);
+        this.s2.update(s2View, dtReal);
+        this.timeline.update(snap, { held: held && !abortState, alert, state, paused: snap.paused, warp: snap.warp });
+        this.placeCaptions(views);
+      }
     }
     this.captions.update(dtReal, photo);
 

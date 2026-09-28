@@ -65,7 +65,10 @@ export class Captions {
     this.el.append(el);
     const words = text.split(/\s+/).length;
     this.caps.push({ el, until: this.now + Math.max(3.2, 1.2 + words * 0.36) });
-    requestAnimationFrame(() => el.classList.add('in'));
+    // flush the initial style so the fade-in is a CSS transition that starts now; no rAF / wall-clock
+    // timing, so the video tool's stepped animation clock drives it frame-exactly
+    void el.offsetWidth;
+    el.classList.add('in');
     while (this.caps.length > 2) this.retire(this.caps.shift()!);
   }
 

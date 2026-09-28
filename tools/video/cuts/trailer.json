@@ -1,0 +1,29 @@
+{
+  "about": "~42 s highlight for X / LinkedIn / Facebook / Bluesky, cut from the launch takes (\"take\": \"launch/<id>\"). Opens cold on engine startup so the first frames already move.",
+  "query": "tod=twilight&quality=ultra",
+  "fps": 60,
+  "size": [1920, 1080],
+  "scale": 2,
+  "css": ".captions { display: none !important; }",
+  "subs": {"style": "landscape"},
+  "fade": [0.2, 1.0],
+  "shots": [
+    {"id": "03_ignition", "take": "launch/03_ignition", "cam": "S1:pad:engine", "t0": -3.4, "t1": 0.9},
+    {"id": "04_liftoff", "take": "launch/04_liftoff", "cam": "S1:pad:up", "t0": 1.5, "t1": 6.7, "in": "cut"},
+    {"id": "05_tracking", "take": "launch/05_tracking", "cam": "S1:long_lens", "t0": 14.0, "t1": 17.5, "in": "dissolve", "xf": 0.5},
+    {"id": "06_staging", "take": "launch/06_staging", "cam": "S1:chase", "t0": 146.0, "t1": 151.0, "split": true, "in": "dissolve", "xf": 0.5},
+    {"id": "07_jellyfish", "take": "launch/07_jellyfish", "cam": "S1:long_lens:twilight", "t0": 151.0, "t1": 157.0, "in": "cut"},
+    {"id": "09_entry_burn", "take": "launch/09_entry_burn", "cam": "S1:chase", "t0": 386.0, "t1": 392.0, "in": "dissolve", "xf": 0.5},
+    {"id": "10_landing", "take": "launch/10_landing", "cam": "S1:onboard_down", "t0": 487.0, "t1": 491.0, "in": "dissolve", "xf": 0.4},
+    {"id": "11_touchdown", "take": "launch/11_touchdown", "cam": "SHIP:deck", "t0": 503.0, "t1": 510.5, "in": "cut"},
+    {"id": "12_on_deck", "take": "launch/12_on_deck", "cam": "S1:cinematic:ship_orbit", "t0": 511.0, "t1": 516.0, "in": "dissolve", "xf": 0.6}
+  ],
+  "cards": [
+    {"shot": "12_on_deck", "from": 0.8, "to": 5.0, "title": "spacex.vaclavkozak.com", "tracking": 0.1, "sub": "Runs live in your browser · fan-made, not affiliated with SpaceX"}
+  ],
+  "deliver": [
+    {"file": "socials/video/trailer_4k60_subs.mp4", "preset": "4k", "subs": true},
+    {"file": "socials/video/trailer_1080p60_subs.mp4", "preset": "1080p", "subs": true},
+    {"srt": "socials/video/trailer.en.srt"}
+  ]
+}

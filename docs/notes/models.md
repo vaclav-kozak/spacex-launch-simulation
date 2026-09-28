@@ -62,6 +62,24 @@
 * **Ship frame (OCISLY):** origin = deck centre / landing aim point at deck level. +Y is up, +Z the bow and
   +X port. The deck is 3.2 m above the waterline and 91.4 × 52 m with the wings (z ∈ [−30, 38]).
   Aft blast wall at z −30.6. Thrusters are at (±11.8, ±42.3). Port lights are red and starboard green.
+* **OCISLY deck floods (round 5, `droneship.ts`):** there are six pole heads (x ±25.4, y 6.6, z −20/4/28), aimed
+  at the deck centre, warm white (1, 0.84, 0.64). One head is `FLOOD_I` = 9 at night (irradiance = I cos/d²; the
+  moon is ~0.01, the twilight sky at the ship ~1e-4). They are on at night (k 1) and at twilight (k 0.9, since the
+  ship is past nautical twilight at landing), and off in the morning. The head emissive is 60·k and blooms. The light
+  comes from two cheap parts:
+  * **Deck lightmap** (`bakeDeckLight`): a 128×224 sRGB DataTexture baked at load from the six heads
+    (Gaussian beam exp(−(θ/0.58)²) · cos/d²), with channel 0 = the deck UVs (u = (26 − x)/52, v = (45.7 − z)/91.4).
+    It is on `Ship_Deck` as `lightMap`, intensity k·9·peak. It gives pools of light, the lit landing circle
+    and dark gaps between the poles. The cost is one texture fetch.
+  * **Two shadowless SpotLights** on the diagonal poles (starboard-aft (−25.4, −20) and port-bow (25.4, 28)),
+    at 6.9 m, aimed 17 m up the booster's station, with I = 4.5·9·k, range 150 and a cone of 0.62. They light the
+    landed or descending booster (and the deck hardware) from two sides. They live in the ship group, so they
+    are counted only in views that show the ship, and the pad's two spots are never in such a view: every lit
+    material keeps the 0- or 2-spot variant that the pad already compiled at liftoff.
+  * Perf (`perf.py`, paused, floods on vs off): deck cam at T+508 GPU scene 1.86 vs 1.80 ms (ultra) and
+    0.26 vs 0.26 ms (low); ship_orbit 1.32 vs 1.21 ms (ultra). That is within noise.
+  * Not done: the flood reflections on the ocean (earth.ts `oceanSpec` only takes plume lights), the booster's
+    shadow in the lightmap, and wet-deck roughness.
 
 ## SLC-4E pad (for VFX / cameras / env)
 Pad frame = W shifted to (0, PAD_ELEVATION, 0).
@@ -124,3 +142,17 @@ Pad frame = W shifted to (0, PAD_ELEVATION, 0).
   deck cam showed an empty deck. Landing visuals were verified with `camfake=1`.
 * **VFX:** consider moving the pad impingement plane from −9 m to the pad surface under the mount, or keep it.
   Visually both work because the duct opening is opaque black at the surface.
+
+## MVac extension glow, round 5 (plume agent)
+* The heat-up after SES-1 uses `TAU_HEAT` 4.5 s (was 7), matching a ~1 mm radiatively cooled Nb sheet. The
+  bell is dull red at +3 s, orange at +7 s and bright at +12 s. The steady-state profile `MVAC_T.ss` keeps the
+  lip at ~1080 K (was ~950 K), so the exit rim stays a dull cherry red at full thrust.
+* The display mapping is `GLOW_PEAK 1.8 x (L/Lref)^1.0`. L is Wien at 0.75 um (`GLOW_KCAM`: an IR-leaky camera
+  red), not photopic. At the engine cam's anchored exposure (x3.05, read via `PostPipeline.readExposure`)
+  the hot band maps ~2.5 stops over mid grey (AgX pale yellow-orange), mid-bell ~0.8 (saturated orange) and
+  the lip ~0.05 (dim red). Anything much brighter goes to a peach ball through AgX.
+* A shared uniform `uReflK` (onBeforeCompile on `MVac_Ext` / `MVac_ExtInner`) fades the extension's reflected
+  sun and sky light to 15 % as the hot band passes 800 -> 1350 K, and brings it back while cooling. The grey
+  sheen was mostly the rough coating's grazing sun specular (~0.07 pre-tonemap even at black albedo). It
+  turned the orange salmon. The real engine cam's auto exposure hides it.
+* Post-SECO: the director's 7.5 s night hold still ends on a dim red bell (~1100 K).

@@ -834,6 +834,10 @@ export class AudioEngine {
   // ------------------------------------------------------------------ debug capture (tests)
   /** audio-clock sample frame of the first sample of the current capture (null until it arrives) */
   captureStartFrame: number | null = null;
+  /** Callout clips started so far (text, voice, AudioContext start time, length), for video subtitles. */
+  debugSpoken(): { text: string; voice: string; at: number; dur: number }[] { return this.callouts.spoken; }
+  /** [decoded, total] callout clips */
+  debugCalloutsDecoded(): [number, number] { return this.callouts.decodeProgress(); }
   /** Start recording the master output (post limiter) into memory. */
   async debugCaptureStart(): Promise<boolean> {
     const ac = this.ac;

@@ -119,8 +119,11 @@ def blur(a, k=2):
 
 
 def billow_puff(S, seed):
-    """Cauliflower puff: smooth union of spheres in 4 hierarchical levels (cumulus-like).
-    Normals from the smoothed front height field, projected thickness for density, cavity AO in B."""
+    """Billowing puff: Gaussian lobes in 2 hierarchical levels (broad lobes only).
+    Normals from a soft-max relief of the lobes, projected density, broad cavity AO in B.
+    (Round 5: the third level of small spheres and the fBm bump were dropped. Magnified to 500+ px at
+    4K they drew a network of dark creases ("cotton balls"); the fine turbulent detail now comes
+    from the 3D noise in the particle shader, which does not repeat between puffs.)"""
     r = np.random.default_rng(seed)
     t = ((np.arange(S) + 0.5) / S * 2 - 1) * 0.66  # zoom so the puff fills the cell
     x, y = np.meshgrid(t, -t, indexing='xy')
@@ -134,11 +137,11 @@ def billow_puff(S, seed):
             if v[2] >= zmin:
                 return v
 
-    c0 = np.array([0.0, -0.1, 0.0])
-    r0 = 0.36
+    c0 = np.array([0.0, -0.08, 0.0])
+    r0 = 0.38
     spheres.append((c0, r0))
     lvl = [(c0, r0)]
-    for depth, (nmin, nmax, kmin, kmax, out) in enumerate([(9, 13, 0.5, 0.72, 0.78), (5, 8, 0.36, 0.52, 0.8), (3, 6, 0.32, 0.48, 0.8)]):
+    for depth, (nmin, nmax, kmin, kmax, out) in enumerate([(7, 10, 0.5, 0.72, 0.74), (3, 5, 0.42, 0.6, 0.78)]):
         nxt = []
         for (c, rr) in lvl:
             n = int(r.integers(nmin, nmax + 1))
@@ -146,43 +149,37 @@ def billow_puff(S, seed):
                 d = rand_dir(-0.35 if depth == 0 else -0.05, 0.3 if depth == 0 else 0.2)
                 cr = rr * (kmin + (kmax - kmin) * r.random())
                 cc = c + d * rr * out
-                if np.hypot(cc[0], cc[1]) + cr > 0.62:
+                if np.hypot(cc[0], cc[1]) + cr > 0.64:
                     continue
                 spheres.append((cc, cr))
                 nxt.append((cc, cr))
         lvl = nxt
-    k = 0.018  # smooth-max width (sprite units)
-    acc = np.zeros((S, S))
-    back = np.full((S, S), 9.0)
-    cover = np.zeros((S, S), dtype=bool)
+    # Relief: soft max (p-norm) of Gaussian domes, one per lobe. Smooth everywhere: no creases between
+    # lobes and no normal flip at the silhouette. (Round 5: a metaball z-sweep with hard-surface normals
+    # still drew a ring around every small lobe and a dark outline inside each puff's soft edge,
+    # visible as circles all over the cloud at 4K.)
+    P = 2.0
+    Hh = np.zeros((S, S))
     for (c, rr) in spheres:
-        d2 = (x - c[0]) ** 2 + (y - c[1]) ** 2
-        m = d2 < rr * rr
-        z = np.sqrt(np.clip(rr * rr - d2, 0, None))
-        acc += np.where(m, np.exp((c[2] + z) / k), 0.0)
-        back = np.minimum(back, np.where(m, c[2] - z, 9.0))
-        cover |= m
-    front = np.where(cover, k * np.log(np.maximum(acc, 1e-300)), -1.0)
-    thick = np.where(cover, np.maximum(front - back, 0), 0.0)
-    cov = blur(cover.astype(float), 2)
-    # normals from the smoothed height field; the silhouette rolls over to the side
-    hf = np.where(cover, front, back.max() * 0 - 0.2)
-    bump = fbm2(S, 12, 3, seed * 5 + 9) * 0.006 + fbm2(S, 28, 2, seed * 5 + 17) * 0.0015
-    hs = blur(hf, 3) + bump * cov
+        Hh += (rr * np.exp(-((x - c[0]) ** 2 + (y - c[1]) ** 2) / (rr * rr))) ** P
+    hs = blur(Hh ** (1 / P), 3) * 1.1
     gy, gx = np.gradient(hs)
     px = 2.0 * 0.66 / S
     nx, ny = -gx / px, gy / px
     ln = np.sqrt(nx * nx + ny * ny + 1)
     nx, ny = nx / ln, ny / ln
-    # cavity AO
-    hb = blur(hf, 12)
-    ao = np.clip(1 - np.clip(hb - hf, 0, None) * 4.0, 0.45, 1.0)
-    ao = np.where(cover, blur(ao, 1), 1.0)
-    # density: optically thick body, soft eroded rim
-    edge_n = fbm2(S, 10, 4, seed * 7 + 3)
-    dens = 1 - np.exp(-blur(thick, 1) * 10.0)
-    rim = np.clip(cov * 1.3 - 0.15 + edge_n * 0.6 * (1 - cov) * 2.0, 0, 1)
-    dens = blur(dens * rim, 1)
+    # broad cavity AO (between lobes only)
+    hb = blur(hs, 20)
+    ao = np.clip(1 - np.clip(hb - hs, 0, None) * 3.0, 0.65, 1.0)
+    # density: projected Gaussian lobes (a soft volume, not a solid disc: overlapping puffs blend into
+    # one cloud and the outer edge fades out; the shader erodes the fade with 3D noise)
+    D = np.zeros((S, S))
+    for (c, rr) in spheres:
+        D += rr * np.exp(-1.25 * ((x - c[0]) ** 2 + (y - c[1]) ** 2) / (rr * rr))
+    D /= np.percentile(D, 99.5)
+    dens = 1 - np.exp(-3.2 * D)
+    dens *= np.clip(1 - (x * x + y * y) / (0.66 * 0.66), 0, 1) ** 0.5
+    dens = blur(dens, 2)
     return nx, ny, ao, np.clip(dens, 0, 1)
 
 
@@ -219,5 +216,8 @@ def gen_puffs(S=256):
 
 
 if __name__ == '__main__':
-    gen_noise3d()
+    import sys
+    # (`puffs` regenerates only the atlas: the noise volume is shared with the plume shaders)
+    if 'puffs' not in sys.argv[1:]:
+        gen_noise3d()
     gen_puffs()

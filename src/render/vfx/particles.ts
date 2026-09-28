@@ -130,10 +130,14 @@ export class ParticleSystem {
   private seedCounter = 1;
   private _c = new THREE.Color();
   // pad self-shadow grid
-  readonly grid = new DensityGrid(24, 12, 24, 1400, 480);
+  // (25 m cells over 800 x 360 m: the launch cloud's first ~15 s; 58 m cells were coarser than the
+  //  billows, so the cloud never shadowed the flame light from itself)
+  readonly grid = new DensityGrid(32, 14, 32, 800, 360);
   /** skip the (CPU) self-shadow grid, e.g. during seek pre-warm; call refreshGrid() after */
   gridEnabled = true;
-  plLights: { pos: THREE.Vector3; color: THREE.Color; range: number }[] = [];
+  /** brightest plume light of the last drawn frame (W): occlusion toward the flame in the pad cloud */
+  private flamePos = new THREE.Vector3();
+  private flameOn = false;
 
   constructor(private ctx: AppContext, max: number, puffTex: THREE.Texture) {
     this.max = max;
@@ -535,8 +539,11 @@ export class ParticleSystem {
     }
     if (!any) return;
     g.integrate(this.ctx.lighting.sunDir);
-    const L0 = this.ctx.plumeLights[0];
-    const hasL = !!L0 && L0.pos.distanceToSquared(_origin.set(0, env.padGroundY, 0)) < 1500 * 1500;
+    // (the particle update runs before VFX publishes this frame's lights: ctx.plumeLights is empty
+    //  here, so use the brightest light of the last drawn frame. Before round 5 the occlusion toward
+    //  the flame was therefore never applied)
+    const hasL = this.flameOn && this.flamePos.distanceToSquared(_origin.set(0, env.padGroundY, 0)) < 1500 * 1500;
+    const L0 = { pos: this.flamePos };
     for (let j = 0; j < this.count; j++) {
       if (!(this.flags[j] & P_PADGRID)) { this.plOcc[j] = 1; continue; }
       const h = this.py[j] - env.padGroundY;
@@ -545,7 +552,13 @@ export class ParticleSystem {
       // own contribution is roughly half of the local cell: remove bias with a soft offset
       this.shadow[j] = 0.1 + 0.9 * Math.exp(-Math.max(0, odS - 0.3) * 0.6);
       this.ambOcc[j] = 0.35 + 0.65 * Math.exp(-Math.max(0, odU - 0.3) * 0.35);
-      this.plOcc[j] = hasL ? 0.08 + 0.92 * Math.exp(-Math.max(0, g.odTo(this.px[j], h, this.pz[j], L0.pos.x, L0.pos.y - env.padGroundY, L0.pos.z) - 0.4) * 0.5) : 1;
+      // (flame light through the cloud: the side of the cloud away from the fire is in its own shadow)
+      // (the cloud is optically thick, od ~10-500 through it; multiply scattered flame light still
+      //  diffuses a few tens of metres in, so a slow response: lit skin near the fire, dark far side.
+      //  The flame blows a clear cavity around itself: the last 22 m toward it are not counted, else
+      //  the dense steam at the mount put nearly every puff at the floor)
+      const od = hasL ? g.odTo(this.px[j], h, this.pz[j], L0.pos.x, L0.pos.y - env.padGroundY, L0.pos.z, 22) : 0;
+      this.plOcc[j] = hasL ? 0.06 + 0.94 * Math.exp(-Math.max(0, od - 2) * 0.02) : 1;
     }
   }
 
@@ -721,6 +734,8 @@ export class ParticleSystem {
         L.inst.needsUpdate = true;
       }
     }
+    this.flameOn = plumeLights.length > 0;
+    if (this.flameOn) this.flamePos.copy(plumeLights[0].pos);
     // plume lights (camera-relative)
     const u = this.mat.uniforms;
     const pp = u.uPLPos.value as THREE.Vector3[], pc = u.uPLCol.value as THREE.Vector3[], pr = u.uPLRange.value as number[];
@@ -842,17 +857,19 @@ export class DensityGrid {
     return arr[this.idx(ix, iy, iz)];
   }
   sampleSun(x: number, h: number, z: number): number { return this.sample(this.sunOD, x, h, z); }
-  /** optical depth from (x,h,z) toward a target point (skipping the particle's own cell) */
-  odTo(x: number, h: number, z: number, tx: number, th: number, tz: number): number {
+  /** optical depth from (x,h,z) toward a target point (skipping the particle's own cell and the
+   *  last `short` metres before the target) */
+  odTo(x: number, h: number, z: number, tx: number, th: number, tz: number, short = 0): number {
     const dx = tx - x, dy = th - h, dz = tz - z;
     const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
     if (len < 1) return 0;
     const n = 7;
     const t0 = Math.min(0.9, (this.cx * 0.6) / len);
+    const t1 = Math.max(t0, 1 - short / len);
     let od = 0;
-    const seg = (len * (1 - t0)) / n;
+    const seg = (len * (t1 - t0)) / n;
     for (let k = 0; k < n; k++) {
-      const t = t0 + ((1 - t0) * (k + 0.5)) / n;
+      const t = t0 + ((t1 - t0) * (k + 0.5)) / n;
       od += this.sample(this.d, x + dx * t, h + dy * t, z + dz * t) * seg;
     }
     return od;
@@ -870,22 +887,18 @@ attribute vec4 iAlbEmis;
 attribute vec4 iSunAmb;
 attribute vec4 iMisc;
 attribute vec4 iAxis;   // W elongation axis, aspect (1 = round)
-uniform vec3 uPLPos[4];
-uniform vec3 uPLCol[4];
-uniform float uPLRange[4];
 varying vec2 vUv;
 varying vec4 vCell;     // atlas offset xy, rot cos/sin
 varying vec3 vViewPos;
 varying vec4 vTauTSize; // tau, temperature, size, thin
 varying vec4 vAlbEmis;
 varying vec3 vSun;
-varying vec3 vPL;
-varying vec3 vPLDir;
 varying float vAmb;
 varying vec3 vAT;
 varying vec3 vAI;
 varying float vNear;
 varying vec3 vNoise;    // per-particle noise coordinate offset + evolution
+varying float vPLOcc;   // occlusion toward the flame (pad-cloud grid)
 void main() {
   vec3 wp = iPosSize.xyz;          // camera-relative (world after floating-origin shift)
   float size = iPosSize.w;
@@ -917,25 +930,8 @@ void main() {
   vAlbEmis = iAlbEmis;
   vSun = iSunAmb.xyz;
   vAmb = iSunAmb.w;
-  // plume lights: irradiance at the puff (softened by its size) + dominant direction (view space)
-  vec3 pl = vec3(0.0);
-  vec3 pd = vec3(0.0);
-  for (int k = 0; k < 4; k++) {
-    vec3 d = uPLPos[k] - wp;
-    float d2 = dot(d, d);
-    float win = clamp(1.0 - pow(sqrt(d2) / uPLRange[k], 4.0), 0.0, 1.0);
-    // (softened by the puff size and by the extent of the source itself: the flame / fire are
-    //  metres long, so a puff next to them is not lit like one next to a point)
-    vec3 e = uPLCol[k] * win * win / (d2 + size * size * 0.35 + 30.0);
-    pl += e;
-    pd += normalize(d + 1e-4) * dot(e, vec3(0.3, 0.5, 0.2));
-  }
-  // (x0.04: look-dev measured plume-lit pad smoke at 2^2..2^4.5 scene units; night-launch photo
-  //  exposures put it at ~2^-3..2^-1.5 while the plume core (60-150) stays the brightest element.
-  //  Saturated toward deep orange so the tone mapper does not wash it to cream.)
-  float plL = dot(pl, vec3(0.3, 0.5, 0.2));
-  vPL = max(mix(vec3(plL), pl, 1.35), 0.0) * iMisc.z * 0.028;
-  vPLDir = normalize((modelViewMatrix * vec4(pd + vec3(0.0, 1e-6, 0.0), 0.0)).xyz);
+  // (plume lights are evaluated per fragment, see the FS)
+  vPLOcc = iMisc.z;
   vAT = aerialTransmittance(wp);
   vAI = aerialInscatter(wp);
   // fade puffs that engulf the camera (avoids full-screen blobs + near-plane popping)
@@ -956,6 +952,9 @@ uniform vec3 uSunView;
 uniform vec3 uUpView;
 uniform vec3 uAmbCol;
 uniform vec3 uGndCol;
+uniform vec3 uPLPos[4];   // camera-relative W (= world during the draw: the camera sits at the origin)
+uniform vec3 uPLCol[4];
+uniform float uPLRange[4];
 #ifdef VFX_LOWRES
 uniform float uLowF;
 #endif
@@ -965,13 +964,12 @@ varying vec3 vViewPos;
 varying vec4 vTauTSize;
 varying vec4 vAlbEmis;
 varying vec3 vSun;
-varying vec3 vPL;
-varying vec3 vPLDir;
 varying float vAmb;
 varying vec3 vAT;
 varying vec3 vAI;
 varying float vNear;
 varying vec3 vNoise;
+varying float vPLOcc;
 void main() {
   #include <logdepthbuf_fragment>
   vec2 uv = vec2(vUv.x, 1.0 - vUv.y);            // atlas rows are stored top-down (flipY = false)
@@ -981,11 +979,32 @@ void main() {
   // heavily exposed high-altitude gas shows no cut-off edge)
   if (dens < 0.004 || (vTauTSize.x * dens < 2e-4 && vTauTSize.y < 700.0)) discard;
   float billowy = vCell.y < 0.25 ? 1.0 : 0.0;
-  // evolving erosion: eats into the rim and thin parts so puffs never read as flat cut-outs
-  float en = n3(vec3(vUv * 0.55, 0.0) + vNoise);
-  float en2 = n3(vec3(vUv * 1.3, 0.5) + vNoise * 1.7);
-  float ero = (en * 0.65 + en2 * 0.35 - 0.5) * 2.0 * mix(1.0, 0.35, vTauTSize.w);
-  dens = clamp(dens * (1.0 + 0.45 * ero) - 0.18 * (1.0 - dens) * max(ero, 0.0) * 2.0, 0.0, 1.0);
+  float size = vTauTSize.z;
+  vec4 nA = n3v(vec3(vUv * 0.55, 0.0) + vNoise);
+  vec4 nB = n3v(vec3(vUv * 1.3, 0.5) + vNoise * 1.7);
+  float en = nA.r, en2 = nB.r;
+  float det = 0.55;
+  vec2 bump = vec2(0.0);
+  if (billowy > 0.5) {
+    // Billowing steam / exhaust. The atlas holds only the broad lobes; the fine turbulent structure is
+    // three octaves of perlin fBm at per-puff offsets that churn with age, so no two puffs share detail
+    // and nothing repeats even at 4K. The gaps eat deep into the soft rim (wispy, dissolving edges)
+    // and only shade the core.
+    // (no Worley: its cell edges drew dark rings and a crease network across the cloud at 4K)
+    vec4 nC = n3v(vec3(vUv * 2.9, 0.21) + vNoise * 2.6);
+    det = nA.r * 0.45 + nB.r * 0.3 + nC.r * 0.25;
+    float dd = det - 0.55;
+    dens = clamp(dens * (1.0 + 0.9 * dd) + (1.0 - dens) * dd * 0.8, 0.0, 1.0);
+    // detail relief: screen-space slope of the noise height (in puff radii) tilts the normal
+    float h = (nB.r * 0.6 + nC.r * 0.4) * 0.07;
+    float pxR = max(length(dFdx(vUv)), length(dFdy(vUv))) * 2.0 + 1e-6;
+    bump = -vec2(dFdx(h), dFdy(h)) / pxR;
+    bump *= 1.0 / max(1.0, length(bump) * 1.4);
+  } else {
+    // evolving erosion: eats into the rim and thin parts so puffs never read as flat cut-outs
+    float ero = (en * 0.65 + en2 * 0.35 - 0.5) * 2.0 * mix(1.0, 0.35, vTauTSize.w);
+    dens = clamp(dens * (1.0 + 0.45 * ero) - 0.18 * (1.0 - dens) * max(ero, 0.0) * 2.0, 0.0, 1.0);
+  }
   if (dens < 0.004) discard;
   float viewZ = -vViewPos.z;
 #ifdef VFX_LOWRES
@@ -995,18 +1014,46 @@ void main() {
 #else
   float sceneZ = vfxSceneDepth();
 #endif
-  float size = vTauTSize.z;
   float soft = clamp((sceneZ - viewZ) / (size * 0.45 + 0.3), 0.0, 1.0);
   if (soft <= 0.0) discard;
+  // optical depth through this texel (billows: thicker where the detail bulges)
+  float odV = vTauTSize.x * dens * mix(1.0, 0.55 + 0.9 * det, billowy);
   // an optically thin puff (fresh wisp or a fading, expanded one) has no surface to shade: blend it
   // toward the thin-gas phase lighting, otherwise its sprite normals rim-light a hard arc
   float thin = max(vTauTSize.w, exp(-1.5 * vTauTSize.x));
   // sprite-space normal -> view space (rotate with the sprite)
   vec2 nxy = tex.rg * 2.0 - 1.0;
-  nxy = nxy * 0.85 + vec2(en - 0.5, en2 - 0.5) * 0.3;
+  nxy = billowy > 0.5 ? nxy * 0.85 : nxy * 0.85 + vec2(en - 0.5, en2 - 0.5) * 0.3;
   vec3 n = vec3(vCell.z * nxy.x - vCell.w * nxy.y, vCell.w * nxy.x + vCell.z * nxy.y, sqrt(max(0.0, 1.0 - dot(nxy, nxy))));
-  n = normalize(mix(n, vec3(0.0, 0.0, 1.0), thin * 0.7 + (1.0 - billowy) * 0.3));
-  float ao = billowy > 0.5 ? tex.b : 1.0;
+  n.xy += bump * (1.0 - thin);
+  n = normalize(mix(normalize(n), vec3(0.0, 0.0, 1.0), thin * 0.7 + (1.0 - billowy) * 0.3));
+  float ao = billowy > 0.5 ? tex.b * mix(0.75, 1.0, smoothstep(0.35, 0.7, det)) : 1.0;
+  // plume / fire lights per fragment at the (approximate) surface point: steep falloff, so the cloud
+  // is brightest where the flame hits and the far side of every billow is in its own shadow
+  vec3 fp = vViewPos + n * (size * 0.35 * dens);
+  vec3 plC = vec3(0.0);
+  vec3 plD = vec3(0.0);
+  for (int k = 0; k < 4; k++) {
+    if (uPLRange[k] <= 1.0) break; // unused slot (lights are sorted by intensity)
+    vec3 d = (viewMatrix * vec4(uPLPos[k], 1.0)).xyz - fp;
+    float d2 = dot(d, d);
+    float rr = d2 / (uPLRange[k] * uPLRange[k]);
+    float win = clamp(1.0 - rr * rr, 0.0, 1.0);
+    // (softened by the extent of the source: the flame / fire are metres long)
+    // (the grid occlusion is toward light 0, the main flame: it also holds for lights near it, the
+    //  pad / deck impact flash, but not for the trench-mouth fire 40 m away)
+    vec3 dl = uPLPos[k] - uPLPos[0];
+    float occ = mix(vPLOcc, 1.0, smoothstep(300.0, 900.0, dot(dl, dl)));
+    vec3 e = uPLCol[k] * (occ * win * win / (d2 + size * size * 0.05 + 30.0));
+    plC += e;
+    plD += d * (inversesqrt(d2 + 1e-4) * dot(e, vec3(0.3, 0.5, 0.2)));
+  }
+  // (x0.028: look-dev measured plume-lit pad smoke at 2^2..2^4.5 scene units; night-launch photo
+  //  exposures put it at ~2^-3..2^-1.5 while the plume core (60-150) stays the brightest element.
+  //  Saturated toward deep orange so the tone mapper does not wash it to cream.)
+  float plL = dot(plC, vec3(0.3, 0.5, 0.2));
+  vec3 PL = max(mix(vec3(plL), plC, 1.35), 0.0) * 0.028;
+  vec3 plDir = normalize(plD + vec3(0.0, 1e-6, 0.0));
   vec3 V = normalize(vViewPos);
   float cosT = dot(V, uSunView);
   float ndl = dot(n, uSunView);
@@ -1015,12 +1062,11 @@ void main() {
   float lamb = clamp((ndl + 0.15) / 1.15, 0.0, 1.0);
   // diffuse transmission through the puff (multiple scattering, g ~ 0.85: 1 / (1 + 0.75 (1 - g) tau)):
   // a backlit steam puff glows through instead of going near-black against the light
-  float odV = vTauTSize.x * dens;
   float transD = 0.8 / (1.0 + 0.11 * odV);
   lamb = max(lamb, transD * clamp(-ndl, 0.0, 1.0));
   // silver lining keyed on the optical depth through this texel (not on the raw sprite density):
   // an optically thin puff forward-scatters evenly instead of drawing a bright ring at its rim
-  float silver = hgPhase(cosT, 0.8) * 12.566 * exp(-1.3 * vTauTSize.x * dens) * 0.3;
+  float silver = hgPhase(cosT, 0.8) * 12.566 * exp(-1.3 * odV) * 0.3;
   float denseTerm = lamb * mix(0.65, 1.0, ao) + 0.26 * mix(0.6, 1.0, ao) + silver;
   float thinTerm = mix(1.0, hgPhase(cosT, 0.55) * 12.566, 0.65);
   // Daylight steam / smoke reads white-grey in real footage (the camera white-balances the ~17 deg
@@ -1032,12 +1078,14 @@ void main() {
   vec3 sunW = mix(vSun, vec3(sunY), wb);
   vec3 sunDense = mix(sunW, vec3(sunY), 0.3 * (1.0 - thin));
   float nu = dot(n, uUpView);
-  vec3 amb = uAmbCol * (0.62 + 0.38 * nu) * vAmb + uGndCol * (0.5 - 0.5 * nu) * 0.6;
-  float plW = clamp((dot(n, vPLDir) + 0.6) / 1.6, 0.0, 1.0);
-  plW = max(plW, transD * clamp(-dot(n, vPLDir), 0.0, 1.0));
-  vec3 E = mix(sunDense * denseTerm, sunW * thinTerm, thin) + amb * mix(1.0, ao, billowy * 0.6) + vPL * mix(plW * mix(0.6, 1.0, ao), 0.8, thin);
+  // sky from above (tops pick up the blue-grey skylight), a little ground bounce from below
+  vec3 amb = uAmbCol * mix(0.62 + 0.38 * nu, 0.4 + 0.6 * max(nu, 0.0) + 0.1 * nu, billowy) * vAmb + uGndCol * (0.5 - 0.5 * nu) * 0.6;
+  float ndp = dot(n, plDir);
+  float plW = mix(clamp((ndp + 0.6) / 1.6, 0.0, 1.0), clamp((ndp + 0.3) / 1.3, 0.0, 1.0), billowy);
+  plW = max(plW, transD * clamp(-ndp, 0.0, 1.0));
+  vec3 E = mix(sunDense * denseTerm, sunW * thinTerm, thin) + amb * mix(1.0, ao, billowy * 0.6) + PL * mix(plW * mix(0.6, 1.0, ao), 0.8, thin);
   vec3 lit = vAlbEmis.rgb * E * 0.3183;
-  float alpha = (1.0 - exp(-vTauTSize.x * dens)) * soft * vNear;
+  float alpha = (1.0 - exp(-odV)) * soft * vNear;
   // blackbody emission (fire / glowing exhaust), independent of opacity
   vec3 emis = vec3(0.0);
   float T = vTauTSize.y;

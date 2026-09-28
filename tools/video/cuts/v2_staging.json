@@ -1,0 +1,20 @@
+{
+  "about": "9:16 clip: MECO, stage separation, second engine start and the twilight jellyfish plume.",
+  "query": "tod=twilight&quality=ultra&hud=min&labels=0",
+  "fps": 60,
+  "size": [540, 960],
+  "scale": 4,
+  "css": ".captions { display: none !important; }",
+  "subs": {"style": "vertical"},
+  "fade": [0.15, 0.8],
+  "shots": [
+    {"id": "staging", "cam": "S1:chase", "t0": 143.5, "t1": 151.0, "preroll": 2, "split": true},
+    {"id": "jellyfish", "cam": "S1:long_lens:twilight", "t0": 151.0, "t1": 163.0, "preroll": 4, "in": "cut"}
+  ],
+  "cards": [
+    {"shot": "jellyfish", "from": 7.5, "to": 12.0, "title": "spacex.vaclavkozak.com", "tracking": 0.06, "size": 2.1, "y": 0.3, "sub": "Runs live in your browser\nEarth imagery: EOX Sentinel-2 cloudless · NASA"}
+  ],
+  "deliver": [
+    {"file": "socials/video/v2_staging.mp4", "preset": "vertical", "subs": true}
+  ]
+}

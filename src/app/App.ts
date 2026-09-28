@@ -80,7 +80,8 @@ export class App {
       stencil: false,
       preserveDrawingBuffer: this.params.has('shot'), // screenshots / photo mode capture
     });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // ?dpr=<n> raises the cap (offline video capture renders portrait clips at DPR 4)
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, Number(this.params.get('dpr')) || 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.NoToneMapping;
     renderer.autoClear = false;

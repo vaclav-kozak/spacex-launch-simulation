@@ -363,7 +363,9 @@ per frame and raises one after 6 s below 13 ms. The line under the selector show
 | `director=0` | Turns off the auto-director |
 | `clouds=0..1.5` | Scales the cloud coverage (0 = clear sky) |
 | `hud=0` / `labels=0` | Hides the HUD / the viewport labels |
+| `hud=min` | Minimal broadcast HUD (clock, stage, speed and altitude, event titles) for vertical video |
 | `step=1` | No render loop; an external driver advances the sim with `__app.frame(dt)` (video capture) |
+| `dpr=<n>` | Raises the device-pixel-ratio cap (default 2), e.g. `dpr=4` for 9:16 video capture |
 
 ## Architecture
 
@@ -381,7 +383,7 @@ src/audio     Web Audio engine, AudioWorklet synth, propagation, callouts
 src/ui        webcast HUD, controls, captions, manual-landing HUD, summary, photo mode
 blender/      headless Blender model builders + numpy texture generators
 tools/audio/  offline callout generation (Kokoro TTS), capture and analysis
-tools/video/  offline 4K60 video rendering: cut lists, frame-stepped takes, audio takes, assembly
+tools/video/  offline video rendering: cut lists, frame-stepped takes, audio takes, subtitles, assembly
 scripts/      shot.py (headless GPU screenshots), perf.py (frame cost), simtest.ts
 docs/         per-area notes and asset licenses
 ```
@@ -419,35 +421,47 @@ docker run --rm -p 8080:80 spacex-launch-simulation   # → http://localhost:808
 
 ## Rendering a video
 
-`tools/video/` turns the sim into a trailer-style edit. The browser cannot capture 4K at 60 fps in real
-time, so the video is not a screen recording. Each shot of a cut list
-([`cuts/launch.json`](tools/video/cuts/launch.json): camera, mission-time range, transition, title cards)
-is rendered frame by frame and then assembled with ffmpeg.
+`tools/video/` turns the sim into trailer-style edits: 16:9 4K60 for YouTube, subtitled 1080p for X, LinkedIn
+and Facebook, and 9:16 clips for TikTok, Reels and Shorts. The browser cannot capture 4K at 60 fps in real
+time, so the video is not a screen recording. Each cut list in [`tools/video/cuts/`](tools/video/cuts)
+defines the camera, mission-time range, transition, title cards, subtitles and deliverables of every shot.
+Each shot is rendered frame by frame and then assembled with ffmpeg.
 
 ```bash
-npm run dev                                          # the tools load the dev server
+npx vite --config tools/audio/vite.audio.config.ts   # private server, no HMR (edits can't reload a capture)
+export SIM_URL=http://127.0.0.1:5199
 python3 tools/video/render.py tools/video/cuts/launch.json    # 4K60 video takes (~0.3-0.5 s per frame)
-python3 tools/video/audio.py tools/video/cuts/launch.json     # audio takes, recorded in real time
-python3 tools/video/assemble.py tools/video/cuts/launch.json  # edit + deliverables in video/launch/
+python3 tools/video/audio.py tools/video/cuts/launch.json     # audio takes + callout log, real time
+python3 tools/video/assemble.py tools/video/cuts/launch.json  # edit master + deliverables
 ```
 
 - **Video takes.** The page runs with `?step=1`, so it has no render loop, and the script calls
-  `__app.frame(1/60)` for every frame. Timers run on Playwright's fake clock, and CSS animations (HUD
-  captions, banners) are stepped on the same virtual clock. A frame can take half a second to render and
-  the take is still perfectly smooth. The viewport is 1920×1080 CSS at device pixel ratio 2. The canvas
-  and the HUD render natively at 3840×2160 (the HUD is not upscaled), and CDP screenshots are piped to
-  x264 as 4:4:4 CRF 10. Every take starts with a few seconds of pre-roll that is rendered but not kept,
-  so auto-exposure, smoke and plume history settle before the first kept frame.
+  `__app.frame(1/60)` for every frame. Timers run on Playwright's fake clock, and CSS animations (HUD titles)
+  are stepped on the same virtual clock. A frame can take half a second to render and the take is still
+  perfectly smooth. The canvas and the HUD render natively at the output resolution; the HUD is not
+  upscaled:
+  - 16:9 renders 1920×1080 CSS at device pixel ratio 2, for 3840×2160.
+  - 9:16 renders 540×960 CSS at DPR 4 (`?dpr=4` lifts the app's cap of 2). That supersamples the
+    1080×1920 deliverable and gives the phone layout of the HUD (`hud=min`).
+
+  CDP screenshots are piped to x264 as 4:4:4 CRF 10. Every take starts with a few seconds of pre-roll that
+  is rendered but not kept, so auto-exposure, smoke and plume history settle first. Short edits reuse parts
+  of a longer cut's takes (`"take": "launch/03_ignition"`).
 - **Audio takes.** Web Audio cannot be frame-stepped, so each shot is played once in real time at low
-  render quality. The sim is driven from the AudioContext clock, and the AudioWorklet tap reports the
-  sample frame of its first sample. Each WAV therefore starts exactly at the shot's first mission time,
-  whatever the render hitches.
-- **Assembly.** Hard cuts and dissolves (video `xfade` plus audio `acrossfade`). Title cards are drawn
-  with PIL in the HUD's D-DIN font. The mix is resampled to 48 kHz and loudness-normalised to −14 LUFS /
-  −1 dBTP in two passes. Outputs:
-  - a 4:4:4 edit master
-  - a 4K60 H.264 file for YouTube
-  - a 1080p60 H.264 file for X, LinkedIn and Facebook
+  render quality. First the page dry-runs the shot, which compiles every shader and builds every effect, and
+  then seeks back. The recording itself drives the sim from the AudioContext clock (it never falls more
+  than one frame behind), and the AudioWorklet tap reports the sample frame of its first sample. Each WAV
+  therefore starts exactly at the shot's first mission time.
+- **Subtitles.** The callout player logs every voice clip it starts, on the audio clock. The assembler maps
+  those clips onto the edit timeline and writes two files:
+  - an `.srt` of whole phrases, for upload as closed captions
+  - an `.ass` of short chunks in D-DIN, which the deliverables burn in
+
+  In 9:16 the burned-in subtitles stay out of the zones the TikTok, Reels and Shorts UI covers.
+- **Assembly.** Hard cuts and dissolves (video `xfade` plus audio `acrossfade`), and title cards drawn with
+  PIL. The mix is resampled to 48 kHz and loudness-normalised to −14 LUFS / −1 dBTP in two passes. The
+  script writes a 4:4:4 edit master, then the deliverables listed in the cut: `4k`, `1080p` or `vertical`,
+  each with or without burned-in subtitles.
 
 ## Known limitations
 
@@ -455,7 +469,7 @@ python3 tools/video/assemble.py tools/video/cuts/launch.json  # edit + deliverab
 - **SECO is late.** It comes at about T+8:59 instead of the webcast's ~8:45. The published second-stage
   propellant load and MVac mass flow force a ~383 s burn, whatever the guidance does.
 - **MECO is early and Max-Q is low.** MECO is ~2 s early, which protects the booster's 26 t landing reserve.
-  Max-Q peaks at 27 kPa, lower than commonly quoted. The time from entry burn to touchdown is ~122 s against
+  Max-Q peaks at 27 kPa, lower than commonly quoted. The time from entry burn to touchdown is ~123 s against
   a real ~130 s.
 - **S1 RCS is stronger than spec.** It is modelled at 2× the per-nozzle thrust so that flips reach ~5°/s.
 - **Fairing heating is a proxy.** The free-molecular heating term ½ρV³ is not physical below ~80 km; it
@@ -482,7 +496,8 @@ python3 tools/video/assemble.py tools/video/cuts/launch.json  # edit + deliverab
   frames at low quality) and costs ~0.5 ms on the dev GPU in that frame.
 - **The first load is ~45 MB.** Textures and env data are plain JPEG/PNG and raw binaries, with no
   GPU-compressed formats yet.
-- **Phones and tablets were not a target** and are untested.
+- **Phones and tablets were not a target.** The HUD has a narrow portrait layout, but performance on mobile
+  GPUs is untested.
 
 ## Assets and licenses
 

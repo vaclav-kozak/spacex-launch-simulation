@@ -1,0 +1,20 @@
+{
+  "about": "9:16 clip: onboard cameras - the glowing MVac nozzle, then the booster looking down at the droneship.",
+  "query": "tod=twilight&quality=ultra&hud=min&labels=0",
+  "fps": 60,
+  "size": [540, 960],
+  "scale": 4,
+  "css": ".captions { display: none !important; }",
+  "subs": {"style": "vertical"},
+  "fade": [0.15, 0.8],
+  "shots": [
+    {"id": "mvac", "cam": "S2:onboard_engine", "t0": 164.0, "t1": 173.0, "preroll": 4},
+    {"id": "down", "cam": "S1:onboard_down", "t0": 486.0, "t1": 495.0, "preroll": 3, "in": "dissolve", "xf": 0.5}
+  ],
+  "cards": [
+    {"shot": "down", "from": 4.5, "to": 9.0, "title": "spacex.vaclavkozak.com", "tracking": 0.06, "size": 2.1, "y": 0.3, "sub": "Runs live in your browser\nEarth imagery: EOX Sentinel-2 cloudless · NASA"}
+  ],
+  "deliver": [
+    {"file": "socials/video/v5_onboard.mp4", "preset": "vertical", "subs": true}
+  ]
+}

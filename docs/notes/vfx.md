@@ -283,3 +283,55 @@ raise threshold, so auto never goes to q3. That is expected there and is not a V
   can differ slightly from the one captured live.
 * The quarter-res far fill keeps a faint (pi, pi) dither residue at 3-4x contrast boost; not visible normally.
 * GTX 1650 estimate for the T+112..130 long lens at q2 is now ~2-3 ms (4-5x the perf table above).
+
+## Changes, round 5 (plume; shots: `/tmp/claude-1000/-home-sudoman-projects-playground-rocket-lounch/bd1946a4-87a9-4b65-8d96-55b6d969fa9c/scratchpad/agents/plume/{before,after}/`, 4K frame-stepped, twilight ultra)
+* **Entry / landing burn dot mesh (4K).** Isolated with per-term toggles: the regular dot grid over the bright
+  fan was the retro flame cushion's fine billow noise `nC` (0.6 m cells), which the flame sub-march (~1 m
+  steps) aliased into a fixed IGN pattern. The bow envelope and the particles were clean. `nC` now uses
+  ~2 m billows (`q / 7.2`, `fl / 16`), so the fan reads as a turbulent cloud. Ultra and high are clean at
+  100 %. Low still shows a faint mesh plus the low-res edge staircase. Cost is unchanged (same lookups).
+  The planned analytic bow-envelope interval sampling was not needed, because the envelope showed no
+  artifact at 4K.
+* **Staging jellyfish (twilight coast shot).** At the far field (`uFar` = 1 there) the remnant's fine radial
+  striations are now faded out fully (they were at half contrast), so the hairy white leaf becomes a soft,
+  sunlit dome. A lower remnant density was tried for translucency but left a broken limb ring, so it was
+  not kept.
+* **Booster streaks in the entry chase:** these are not a bug. Consecutive frames with motion blur on and off
+  are identical. The streaks are the baked soot albedo (`s1_tank_soot_albedo.jpg`, models).
+* Perf (1080p, RTX): entry ultra scene 3.2 ms / post 0.7; entry low 0.34 / 0.48; MVac cam ultra 0.77 / 0.61.
+
+## Changes, round 5 (smoke / particles; shots: `/tmp/claude-1000/-home-sudoman-projects-playground-rocket-lounch/bd1946a4-87a9-4b65-8d96-55b6d969fa9c/scratchpad/agents/smoke/{before,final}/`, frame-stepped, ultra; sheets `cmp_pad.jpg`, `cmp_land.jpg`, 4K crop `crop100_final_padup4.png`)
+* **Puff atlas (billowy row).** The lumpy look and the repeating circles came from the atlas, not from the
+  noise. The small hard-sphere lobes (and a later metaball z-sweep) drew a ring around every lobe, plus a
+  dark AO/normal outline inside each puff's soft edge. At 4K these showed as circles and a crease network
+  across the whole cloud. The relief is now a soft max (p = 2) of Gaussian domes (2 lobe levels). It has
+  no creases and no flip at the silhouette. The density is projected Gaussians. Regenerate with
+  `gen_textures.py puffs` (the noise volume is left alone).
+* **Fine detail in the shader.** It is three octaves of perlin fBm from the shared noise volume at per-puff
+  offsets. Worley is no longer used: its cell edges also drew rings. The noise erodes the soft rim
+  (wispy, dissolving edges) and tilts the normal through a screen-space bump.
+* **Flame lighting per fragment** (moved from per vertex), with steep falloff. The grid occlusion toward the
+  main flame (`plOcc`) was never applied before: `ctx.plumeLights` is empty during `ps.update`. The last
+  drawn frame's brightest light is now cached in `prepareView`. `odTo` skips the last 22 m before the
+  flame, because the flame clears a cavity around itself. The response is slow (`exp(-0.02 od)`, floor
+  0.06), so the cloud is bright where the plume hits and goes dark on its far side. The trench-mouth fire
+  light (> 30 m from light 0) is not occluded. The grid is now 25 m cells over 800 x 360 m.
+* **Pad emitters.** 30-35 % of trench/radial puffs are tan-grey RP-1 exhaust; the deluge steam stays white.
+* **Landing.** The deck-cam wall of orange came from sea spray: 110/s, tau 2.2, 5-9 s, emitted at the deck
+  edge right next to the camera. It is now 40/s, tau 1.2, 3-5.5 s, falling toward the sea. Deck steam
+  went from tau 4.5 / 4-8 s to 2.4 / 2.8-5.4 s. Over the deck the landing-burn trail thins out
+  (`deckK`, below 70 m plane distance), because its 170 s puffs hung over the landed booster as a brown
+  haze. Post-touchdown linger is 9/s, decaying over 4.5 s for 12 s. The booster now reads throughout
+  505-512, and the view clears about 2 s after cutoff.
+* **Perf** (`vfxperf.py --mode particles`: particle GPU ms, 1080p, noisy because the GPU is shared):
+  - padwide q1: 0.06 -> 0.10
+  - padwide q3: 0.34 -> 0.53
+  - padup q3: 0.10-0.17 -> 0.19-0.49
+  - deck q3: 1.25-2.41 -> 1.94
+  - q0: unchanged at 0.02-0.08
+
+  The cost is the extra noise tap and the per-fragment lights; unused light slots break out of the loop.
+  CPU is unchanged.
+* Not done: pad floodlight / sky lighting on the cloud tops. The twilight pad sky ambient is ~1e-3, so the
+  tops stay dark brown rather than blue-grey. A floodlight term would need the pad lights published to VFX.
+  Sorting pops were not seen in the stills.

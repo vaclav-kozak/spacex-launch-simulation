@@ -71,6 +71,17 @@ const _lgL = new Vector3();
 const _lgE = new Vector3();
 const _lgU = new Vector3();
 const _q1 = new Quaternion();
+const _q2 = new Quaternion();
+// touchdown settle (rock onto all four feet + leg stroke), see startSettle
+const SETTLE_TIME = 3;
+const SETTLE_W_TILT = 6, SETTLE_Z_TILT = 0.8;
+const SETTLE_W_LEG = 14, SETTLE_Z_LEG = 0.7;
+/** closed-form underdamped spring x'' + 2ζωx' + ω²x = 0 from (x0, v0), evaluated at t */
+function dampedSpring(x0: number, v0: number, w: number, z: number, t: number): number {
+  const wd = w * Math.sqrt(1 - z * z);
+  const B = (v0 + z * w * x0) / wd;
+  return Math.exp(-z * w * t) * (x0 * Math.cos(wd * t) + B * Math.sin(wd * t));
+}
 const _slU = new Vector3();
 const _slW = new Vector3();
 const _slAero = makeAeroOut();
@@ -315,6 +326,11 @@ export class FlightSim {
   private readonly landedRelPos = new Vector3();
   private readonly landedRelQuat = new Quaternion();
   private tip: { axis: Vector3; theta: number; rate: number; pivot: Vector3; q0: Quaternion; relPivot: Vector3; done: boolean } | null = null;
+  /** successful touchdown: rock onto all four feet about the first foot down + leg stroke (ship frame) */
+  private settle: {
+    t0: number; axis: Vector3; theta0: number; rate0: number; y0: number; vy0: number;
+    pivot: Vector3; restPos: Vector3; restQuat: Quaternion;
+  } | null = null;
   private manualStarts = 0;
   private readonly lastLandingInfo = { burnStartT: NaN, touchdownT: NaN, miss: NaN, impact: new Vector3(), valid: false };
   private flameoutS1 = false;
@@ -576,8 +592,14 @@ export class FlightSim {
     }
     // ignition sequence
     if (!this.ignited && t >= -3) {
+      // Snap the clock onto T−3 exactly (the countdown may have been stepped at 0.02 s, jumped by a
+      // seek or held) so every path into ignition yields the same post-ignition step sequence: event
+      // times must not depend on how the countdown was reached (video shots seek from different t0).
+      const off = Math.round((this.envT - this.t) * 1e3) / 1e3;
+      this.t = -3;
+      this.envT = -3 + off;
       this.ignited = true;
-      this.ignT = t;
+      this.ignT = -3;
       this.ev('IGNITION_SEQUENCE', 'S1');
     }
     if (this.ignited && !this.released) {
@@ -651,7 +673,8 @@ export class FlightSim {
     v.alt = h;
     atmosphere(h, v.atmo);
     const V0 = v.vAir.length();
-    this.wind.sample(rb.pos, h, V0, dt, v.gust, v.wind);
+    // gusts start evolving at ignition: the quiet countdown is stepped or skipped depending on seeks
+    this.wind.sample(rb.pos, h, V0, v.clamped && !this.ignited ? 0 : dt, v.gust, v.wind);
     v.vAir.copy(rb.vel).sub(v.wind);
     _q1.copy(rb.quat).invert();
     v.uBody.copy(v.vAir).applyQuaternion(_q1);
@@ -1750,8 +1773,10 @@ export class FlightSim {
         // final descent: ZEM/ZEV position hold relative to the (moving) deck, small tilt
         const tg = Math.max(LP.tgMin, (2 * Math.max(0, h - LP.H1)) / Math.max(1, vDown + LP.V1) + 2);
         aLat.copy(e).multiplyScalar(6 / (tg * tg)).addScaledVector(vh, -4 / tg);
-        if (h < LP.H1 + 1) aLat.copy(vh).multiplyScalar(-LP.kVel);
-        const tiltDeg = 3 + (LP.finalTiltDeg - 3) * clamp(h / LP.hFinal, 0, 1);
+        // last few metres: blend into pure velocity damping (no step in the commanded lean)
+        const wV = clamp((LP.H1 + LP.dampBlend - h) / LP.dampBlend, 0, 1);
+        if (wV > 0) aLat.multiplyScalar(1 - wV).addScaledVector(vh, -LP.kVel * wV);
+        const tiltDeg = LP.tiltFloorDeg + (LP.finalTiltDeg - LP.tiltFloorDeg) * clamp(h / LP.hFinal, 0, 1);
         const lim = aVert * Math.tan(tiltDeg * D2R);
         const al = aLat.length();
         if (al > lim) aLat.multiplyScalar(lim / al);
@@ -2052,13 +2077,7 @@ export class FlightSim {
     const inv = _q1.copy(ship.quat).invert();
     this.landedRelPos.copy(v.origin).sub(ship.pos).applyQuaternion(inv);
     this.landedRelQuat.copy(inv).multiply(rb.quat);
-    if (upright) {
-      // settle on the legs: body axis to deck normal, feet on deck
-      const ax = _v1.set(0, 1, 0).applyQuaternion(this.landedRelQuat);
-      _q1.setFromUnitVectors(ax, _v2.set(0, 1, 0));
-      this.landedRelQuat.premultiply(_q1).normalize();
-      this.landedRelPos.y = FOOT_DROP;
-    }
+    if (upright) this.startSettle(v, ship);
     v.kinematic = true;
     v.passive = true;
     rb.angVel.set(0, 0, 0);
@@ -2067,13 +2086,69 @@ export class FlightSim {
     this.s1Rcs.off();
   }
 
+  /**
+   * Successful touchdown: instead of snapping upright onto FOOT_DROP (a 3° / 0.45 m pose jump on camera),
+   * the booster rocks about the first foot down onto all four feet (damped, ~1 s) while the legs
+   * take the vertical stroke (a few cm). Both are closed-form in the time since contact, so the pose
+   * does not depend on the step size. Rest pose: body axis on the deck normal, feet on the deck.
+   */
+  private startSettle(v: Vehicle, ship: ShipPose): void {
+    const rb = v.rb;
+    const inv = _q1.copy(ship.quat).invert();
+    const ax = new Vector3(0, 1, 0).applyQuaternion(this.landedRelQuat);
+    const theta0 = Math.acos(clamp(ax.y, -1, 1));
+    // lowest foot (fully deployed geometry) = pivot
+    const pivot = new Vector3();
+    let minY = Infinity;
+    for (let i = 0; i < 4; i++) {
+      const a = (F9.s1.leg.angleDeg[i] * Math.PI) / 180;
+      const fp = _v3.set((F9.s1.leg.span / 2) * Math.cos(a), -FOOT_DROP, (F9.s1.leg.span / 2) * Math.sin(a))
+        .applyQuaternion(this.landedRelQuat).add(this.landedRelPos);
+      if (fp.y < minY) { minY = fp.y; pivot.copy(fp); }
+    }
+    const y0 = pivot.y; // foot penetration at the contact step (≤ 0)
+    pivot.y = 0;
+    const axis = new Vector3(), restQuat = this.landedRelQuat.clone(), restPos = this.landedRelPos.clone();
+    restPos.y -= y0;
+    let rate0 = 0;
+    if (theta0 > 1e-5) {
+      axis.set(-ax.z, 0, ax.x).normalize(); // ax × up
+      _q2.setFromAxisAngle(axis, theta0);
+      restQuat.premultiply(_q2).normalize();
+      restPos.sub(pivot).applyQuaternion(_q2).add(pivot);
+      // keep the rocking rate continuous with the body rate at contact (ship frame)
+      rate0 = -_v4.copy(rb.angVel).applyQuaternion(inv).dot(axis);
+      rate0 = clamp(rate0, -10 * D2R, 10 * D2R);
+    }
+    const vRel = _v4.copy(rb.vel).sub(ship.vel).applyQuaternion(inv);
+    this.settle = { t0: this.t, axis, theta0, rate0, y0: restPos.y - FOOT_DROP + y0, vy0: Math.min(0, vRel.y), pivot, restPos, restQuat };
+    restPos.y = FOOT_DROP;
+  }
+
   private stepLandedBooster(v: Vehicle, dt: number): void {
     const ship = this.shipTarget(this.t);
     const rb = v.rb;
     this.s1Eng.step(dt, 101_325, rb.cg, this.s1Prop);
     this.fins.step(dt);
     this.s1Rcs.apply(null, dt);
+    if (this.legsCmd && this.legs < 1) this.legs = Math.min(1, this.legs + dt / GNC.legsDeployTime);
     if (!ship) return;
+    if (this.settle) {
+      const st = this.settle;
+      const age = this.t - st.t0;
+      if (age >= SETTLE_TIME) {
+        this.landedRelQuat.copy(st.restQuat);
+        this.landedRelPos.copy(st.restPos);
+        this.settle = null;
+      } else {
+        const th = dampedSpring(st.theta0, st.rate0, SETTLE_W_TILT, SETTLE_Z_TILT, age);
+        const y = dampedSpring(st.y0, st.vy0, SETTLE_W_LEG, SETTLE_Z_LEG, age);
+        _q2.setFromAxisAngle(st.axis, -th);
+        this.landedRelQuat.copy(st.restQuat).premultiply(_q2).normalize();
+        this.landedRelPos.copy(st.restPos).sub(st.pivot).applyQuaternion(_q2).add(st.pivot);
+        this.landedRelPos.y += y;
+      }
+    }
     if (this.tip && !this.tip.done) {
       const tp = this.tip;
       // inverted pendulum about the foot pivot
