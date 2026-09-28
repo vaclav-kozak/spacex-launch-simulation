@@ -219,7 +219,9 @@ vec3 lensGhosts(vec2 p) {
   vec4 g0 = texelFetch(tGhost, ivec2(0, 0), 0);
   float F = g0.x;
   if (!(F > 1e-7) || !(F < 1e6)) return vec3(0.0);
-  float compact = 1.0 - smoothstep(uGhost.y, uGhost.z, g0.w);
+  // spread relative to the frame's short side: in portrait, frame-height units would make a plume that fills
+  // the width look compact (red ghost rings beside the MECO plume in 9:16)
+  float compact = 1.0 - smoothstep(uGhost.y, uGhost.z, g0.w / min(uAspect, 1.0));
   if (compact <= 0.0) return vec3(0.0);
   vec4 g1 = texelFetch(tGhost, ivec2(1, 0), 0);
   vec3 src = max(g1.rgb, vec3(0.0));

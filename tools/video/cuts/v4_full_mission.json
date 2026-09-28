@@ -22,7 +22,7 @@
     {"id": "v3_landing_deck", "take": "v3_landing/deck", "cam": "S1:cinematic:ship_orbit", "t0": 511.0, "t1": 515.0, "in": "dissolve", "xf": 0.4}
   ],
   "cards": [
-    {"shot": "v3_landing_deck", "from": 0.6, "to": 4.0, "title": "spacex.vaclavkozak.com", "tracking": 0.06, "size": 2.1, "y": 0.3, "sub": "Runs live in your browser\nEarth imagery: EOX Sentinel-2 cloudless · NASA"}
+    {"shot": "v3_landing_deck", "from": 0.6, "to": 4.0, "title": "spacex.vaclavkozak.com", "tracking": 0.06, "size": 2.1, "y": 0.4, "sub": "Runs live in your browser\nEarth imagery: EOX Sentinel-2 cloudless · NASA"}
   ],
   "deliver": [
     {"file": "socials/video/v4_full_mission.mp4", "preset": "vertical", "subs": true}

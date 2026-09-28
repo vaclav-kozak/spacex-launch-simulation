@@ -16,6 +16,8 @@ const GAP = 2;
 
 /** Tile rects for n views (order = priority / reading order). */
 export function tileRects(n: number, W: number, H: number): Rect[] {
+  // portrait: the landscape layout transposed, so split views stack top / bottom instead of two slivers
+  if (H > W) return tileRects(n, H, W).map((r) => ({ x: r.y, y: r.x, w: r.h, h: r.w }));
   const g = GAP / 2;
   if (n <= 1) return [{ x: 0, y: 0, w: W, h: H }];
   if (n === 2) {

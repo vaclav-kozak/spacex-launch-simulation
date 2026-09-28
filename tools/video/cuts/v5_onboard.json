@@ -12,7 +12,7 @@
     {"id": "down", "cam": "S1:onboard_down", "t0": 498.0, "t1": 512.0, "preroll": 3, "in": "dissolve", "xf": 0.5}
   ],
   "cards": [
-    {"shot": "down", "from": 10.5, "to": 14.0, "title": "spacex.vaclavkozak.com", "tracking": 0.06, "size": 2.1, "y": 0.3, "sub": "Runs live in your browser\nEarth imagery: EOX Sentinel-2 cloudless · NASA"}
+    {"shot": "down", "from": 10.5, "to": 14.0, "title": "spacex.vaclavkozak.com", "tracking": 0.06, "size": 2.1, "y": 0.4, "sub": "Runs live in your browser\nEarth imagery: EOX Sentinel-2 cloudless · NASA"}
   ],
   "deliver": [
     {"file": "socials/video/v5_onboard.mp4", "preset": "vertical", "subs": true}
