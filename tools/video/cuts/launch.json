@@ -17,7 +17,7 @@
     {"id": "08_mvac", "cam": "S2:onboard_engine", "t0": 164.0, "t1": 170.0, "preroll": 2, "in": "cut"},
     {"id": "09_entry_burn", "cam": "S1:chase", "t0": 384.0, "t1": 394.5, "preroll": 3, "in": "dissolve", "xf": 0.6},
     {"id": "10_landing", "cam": "S1:chase", "t0": 486.0, "t1": 493.0, "preroll": 3, "in": "dissolve", "xf": 0.5},
-    {"id": "10b_approach", "cam": "S1:onboard_down", "t0": 498.5, "t1": 503.2, "preroll": 3, "in": "dissolve", "xf": 0.4},
+    {"id": "10b_approach", "cam": "S1:onboard_down", "t0": 499.8, "t1": 503.2, "preroll": 3, "in": "dissolve", "xf": 0.4},
     {"id": "11_touchdown", "cam": "SHIP:deck", "t0": 503.2, "t1": 510.5, "preroll": 3, "in": "cut"},
     {"id": "12_on_deck", "cam": "S1:cinematic:ship_orbit", "t0": 511.0, "t1": 520.0, "preroll": 10, "in": "dissolve", "xf": 0.8}
   ],

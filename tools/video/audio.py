@@ -10,7 +10,8 @@ AudioWorklet tap. The page runs with ?step=1 and this script's rAF loop drives t
 clock itself (mission t = t_start + (ac.currentTime - ac_start)), so a render hitch can delay a
 parameter update but can never drift the sim against the recording. The tap reports the audio-clock
 frame of its first sample, so the output WAV starts exactly at t0 and lasts t1 - t0 (float stereo at
-the context's native rate): <out>/takes/<id>.wav. Every callout clip that plays is logged with its
+the context's native rate): <out>/takes/<id>.wav. When the video take already exists, its t0..t1 is recorded
+instead, so a shot trimmed in the cut list later stays aligned with its take. Every callout clip that plays is logged with its
 audio-clock start, converted to mission time and saved as <id>.subs.json for the subtitles.
 """
 import argparse, asyncio, base64, json, os, re, struct, sys, time
@@ -19,7 +20,7 @@ from playwright.async_api import async_playwright
 from common import GPU_ENV, CHROME_ARGS, load_cut, own_shots, shot_url, out_dir
 
 DRIVE_JS = """
-window.__drive = { on: false, ac0: 0, t0: 0, warm: 0, lag: [] };
+window.__drive = { on: false, ac0: 0, t0: 0, warm: 0, lag: [], lagT: [] };
 const loop = () => {
   requestAnimationFrame(loop);
   const d = __drive;
@@ -28,7 +29,7 @@ const loop = () => {
   if (!d.on) { if (d.warm > 0) { d.warm--; __app.frame(1e-5); } return; }
   const target = d.t0 + (__app.audio.ac.currentTime - d.ac0);
   const dt = target - __app.sim.getSnapshot().t;
-  d.lag.push(dt);
+  d.lag.push(dt); d.lagT.push(target);
   if (dt > 1e-4) __app.frame(dt);
 };
 requestAnimationFrame(loop);
@@ -52,6 +53,12 @@ def write_wav_f32(path, x, sr):
 
 async def record_take(browser, args, cut, shot, odir):
     t0, t1 = shot['t0'], shot['t1']
+    # cover the rendered video take, which may be longer than the shot after a trim in the cut list:
+    # assemble cuts the shot out of both at the same offset from the take's t0
+    tj = os.path.join(odir, 'takes', f"{shot['id']}.json")
+    if os.path.exists(tj):
+        tk = json.load(open(tj))
+        t0, t1 = tk['t0'], tk['t1']
     apre = shot.get('apre', max(3.0, shot['preroll']))
     # same aspect as the video (camera rigs frame by aspect, and sound depends on camera position)
     w, h = cut['size']
@@ -89,6 +96,7 @@ async def record_take(browser, args, cut, shot, odir):
             sys.exit(f"{shot['id']}: sim stuck at t={t:.3f} (target {t1 + 0.5}); {st}")
         await pg.wait_for_timeout(100)
     lag = await pg.evaluate('__drive.lag.slice(30)')  # sim behind the audio clock, per rAF (s)
+    lag_at = await pg.evaluate('__drive.lagT.slice(30)')  # mission time the sim should have been at
     b64 = await pg.evaluate('__app.audio.debugCaptureStop()')
     start = await pg.evaluate('__app.audio.captureStartFrame')
     spoken = await pg.evaluate('__app.audio.debugSpoken()')
@@ -111,7 +119,7 @@ async def record_take(browser, args, cut, shot, odir):
     json.dump(subs, open(path.replace('.wav', '.subs.json'), 'w'), indent=1)
     peak = 20 * np.log10(max(1e-9, np.abs(y).max()))
     rms = 20 * np.log10(max(1e-9, np.sqrt((y ** 2).mean())))
-    print(f"{path}: {n / sr:.2f}s @ {sr} Hz  peak {peak:.1f} dBFS  rms {rms:.1f} dBFS  {len(subs)} lines  max lag {max(lag) * 1000:.0f} ms", flush=True)
+    print(f"{path}: {n / sr:.2f}s @ {sr} Hz  peak {peak:.1f} dBFS  rms {rms:.1f} dBFS  {len(subs)} lines  max lag {max(lag) * 1000:.0f} ms at T{lag_at[int(np.argmax(lag))]:+.2f}", flush=True)
     if max(lag) > 0.1:
         print(f"  WARNING {shot['id']}: the sim fell {max(lag):.2f} s behind the audio clock; callouts may play late", flush=True)
     return path
@@ -131,7 +139,10 @@ async def main():
     shots = [s for s in own_shots(cut) if (not only or s['id'] in only)
              and (args.force or only or not os.path.exists(os.path.join(odir, 'takes', s['id'] + '.subs.json')))]
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, env=dict(os.environ, **GPU_ENV), args=CHROME_ARGS)
+        # fake (timer-driven) audio output: the capture taps the graph, and a real sink (WSLg's PulseAudio)
+        # can stall, which freezes ac.currentTime and with it the sim
+        browser = await p.chromium.launch(headless=True, env=dict(os.environ, **GPU_ENV),
+                                          args=CHROME_ARGS + ['--disable-audio-output'])
         for s in shots:
             await record_take(browser, args, cut, s, odir)
         await browser.close()
