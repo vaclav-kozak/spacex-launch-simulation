@@ -14,6 +14,18 @@ export function snapP(p: AudioParam, v: number, now: number): void {
   p.setValueAtTime(v, now);
 }
 
+/** Looping buffer source, started. Never at playbackRate exactly 1: Chrome on Windows (seen in 152) stops a
+ * looping source played at rate 1 at its first loop wrap, and its filters later put out NaN, which poisons the
+ * master compressors and silences the whole mix for good. Any other rate loops fine (+0.05 %, inaudible). */
+export function loopSource(ac: AC, b: AudioBuffer, rate = 1, when = ac.currentTime, offset = 0): AudioBufferSourceNode {
+  const s = ac.createBufferSource();
+  s.buffer = b;
+  s.loop = true;
+  s.playbackRate.value = rate === 1 ? 1.0005 : rate;
+  s.start(when, offset);
+  return s;
+}
+
 export interface NoiseParams {
   rumble: number; roar: number; crackle: number; rate: number; tone: number; pitch: number;
   drive: number; buffet: number; whine: number; whineHz: number; crackSize: number;
@@ -61,7 +73,7 @@ export class BufferNoise implements NoiseSource {
   private roarLp: BiquadFilterNode;
   constructor(ac: AC, pink: AudioBuffer, crackleLoop: AudioBuffer) {
     this.output = ac.createGain();
-    const mk = (b: AudioBuffer, rate = 1) => { const s = ac.createBufferSource(); s.buffer = b; s.loop = true; s.playbackRate.value = rate; s.start(ac.currentTime + Math.random() * 0.1); return s; };
+    const mk = (b: AudioBuffer, rate = 1) => loopSource(ac, b, rate, ac.currentTime + Math.random() * 0.1);
     const rs = mk(pink, 0.93);
     const rl = ac.createBiquadFilter(); rl.type = 'lowpass'; rl.frequency.value = 45; rl.Q.value = 0.9;
     const rl2 = ac.createBiquadFilter(); rl2.type = 'lowpass'; rl2.frequency.value = 70;
@@ -161,8 +173,7 @@ export class OnboardVoice {
 export class NoiseVoice {
   readonly bp: BiquadFilterNode; readonly lp: BiquadFilterNode; readonly gain: GainNode; readonly pan: StereoPannerNode;
   constructor(ac: AC, noise: AudioBuffer, out: AudioNode, bpHz: number, bpQ: number, lpHz: number, rate = 1) {
-    const s = ac.createBufferSource(); s.buffer = noise; s.loop = true; s.playbackRate.value = rate;
-    s.loopStart = 0; s.start(ac.currentTime, Math.random() * noise.duration * 0.9);
+    const s = loopSource(ac, noise, rate, ac.currentTime, Math.random() * noise.duration * 0.9);
     this.bp = ac.createBiquadFilter(); this.bp.type = 'bandpass'; this.bp.frequency.value = bpHz; this.bp.Q.value = bpQ;
     this.lp = ac.createBiquadFilter(); this.lp.type = 'lowpass'; this.lp.frequency.value = lpHz; this.lp.Q.value = 0.6;
     this.gain = ac.createGain(); this.gain.gain.value = 0;

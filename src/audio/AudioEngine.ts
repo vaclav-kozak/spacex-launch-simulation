@@ -28,7 +28,7 @@ import {
 import * as S from './synth';
 import { CalloutPlayer } from './callouts';
 import {
-  EngineVoice, OnboardVoice, NoiseVoice, WorkletNoise, BufferNoise, crackleLoop, setP, snapP, softClipCurve,
+  EngineVoice, OnboardVoice, NoiseVoice, WorkletNoise, BufferNoise, crackleLoop, loopSource, setP, snapP, softClipCurve,
   type NoiseParams, type NoiseSource, ZERO_NOISE,
 } from './voices';
 
@@ -299,9 +299,7 @@ export class AudioEngine {
     await yieldUI();
     this.buf.hull = S.hullWaterBuffer(ac);
     await yieldUI();
-    const loop = (b: AudioBuffer, out: AudioNode) => {
-      const s = ac.createBufferSource(); s.buffer = b; s.loop = true; s.connect(out); s.start(ac.currentTime, Math.random() * b.duration * 0.9);
-    };
+    const loop = (b: AudioBuffer, out: AudioNode) => loopSource(ac, b, 1, ac.currentTime, Math.random() * b.duration * 0.9).connect(out);
     const surf = g(0); loop(this.buf.surf, surf); surf.connect(this.ambBus);
     const hull = g(0); loop(this.buf.hull, hull); hull.connect(this.ambBus);
     const diesel = g(0);
