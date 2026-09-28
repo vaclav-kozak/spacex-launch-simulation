@@ -49,7 +49,7 @@ const HELP: [string[], string][][] = [
 
 export class HelpOverlay {
   readonly el: HTMLDivElement;
-  constructor(onClose: () => void, credits: [string, string][] = []) {
+  constructor(onClose: () => void, credits: [string, string][] = [], byline: Node | null = null) {
     const cols = HELP.map((col) => h('dl', {}, ...col.flatMap(([k, d]) => [
       h('dt', {}, ...k.map((x) => (x === '\u2013' ? h('span', { class: 'to', text: x }) : h('kbd', { text: x })))),
       h('dd', { text: d }),
@@ -58,7 +58,7 @@ export class HelpOverlay {
     close.addEventListener('click', onClose);
     const cred = credits.length
       ? h('div', { class: 'help-credits' }, h('h3', { text: 'CREDITS' }),
-        h('dl', {}, ...credits.flatMap(([k, v]) => [h('dt', { text: k }), h('dd', { text: v })])))
+        h('dl', {}, ...credits.flatMap(([k, v]) => [h('dt', { text: k }), h('dd', { text: v })])), byline)
       : null;
     this.el = h('div', { class: 'dlg-wrap help', role: 'dialog', 'aria-label': 'Keyboard shortcuts' },
       h('div', { class: 'dlg' }, close, h('h2', { text: 'KEYBOARD' }), h('div', { class: 'help-cols' }, ...cols), cred));

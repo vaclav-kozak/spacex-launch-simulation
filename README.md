@@ -408,6 +408,8 @@ npm run build     # type-check + Vite build → dist/
 - **Caching:** Vite content-hashes only the files in `/assets/`, so those can be cached forever. Everything
   copied from `public/` keeps its name, so give it a shorter cache lifetime.
 - **Where:** any static host works: Cloudflare Pages, Netlify, S3 + CDN, or GitHub Pages on a custom domain.
+- **Analytics:** `vite.config.ts` adds the live demo's self-hosted Plausible snippet to the production build
+  only (the dev and capture servers never load it). Remove or replace it in a fork.
 
 The live demo runs from the [`Dockerfile`](Dockerfile) in this repo. It builds the bundle in a Node stage
 and serves `dist/` from `nginx:stable-alpine` with [`docker/nginx.conf`](docker/nginx.conf), which sets gzip

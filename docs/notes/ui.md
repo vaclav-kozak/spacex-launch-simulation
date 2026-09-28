@@ -135,6 +135,10 @@ The semantics follow `docs/notes/sim.md`.
   * Type (D-DIN, OFL);
   * Voices (Kokoro-82M, Apache-2.0).
 * **Summary modal.** It repeats the EOX line and adds `Earth imagery: NASA`.
+* **Author byline.** `authorCredit()` (Controls.ts) renders "Created by Václav Kozák", GitHub / X icon links (`rel="me noopener"`) and vaclavkozak.cz / vyvoj.vaclavkozak.cz (`rel="noopener"`), all in a new tab.
+  * It is the last row of the open control panel (under the action buttons) and the last line of the help CREDITS. Both hosts are closed by default, so it never sits in the broadcast picture.
+  * `.by` is hidden outright in `?hud=min` and `?shot=1` (the root gets `.is-shot`), and the video tool's capture CSS hides both hosts. `?hud=0` hides the whole layer.
+  * A focused link counts as a control: Space / Enter do not reach the global key map.
 
 ## `?hud=min` (vertical social video, small screens)
 * **What shows.** One top-centre stack (`.minhud` > `.mh-col`): the T± clock (`.mh-clock`, D-DIN Exp 44 px), a hairline with the focused stage's tag (`.mh-tag`, STAGE 1 / STAGE 2), and its speed | altitude around a fixed centre axis (`.mh-read`), so growing numbers never shift the lockup. The big event titles (`.evt-title`) are re-parented under it. Hold / abort / warp notices use `.mh-state`.

@@ -8,7 +8,7 @@ import { MISSION_NAME, IGNITION_TIME } from '../core/constants';
 import { StageTelemetry, type StageView } from './Telemetry';
 import { Timeline } from './Timeline';
 import { Captions } from './Captions';
-import { Controls, WARP_LEVELS, type ControlState } from './Controls';
+import { Controls, WARP_LEVELS, authorCredit, type ControlState } from './Controls';
 import { ManualHud } from './ManualHud';
 import { MinHud } from './MinHud';
 import { HelpOverlay, PhotoPanel, SoundPrompt, SummaryModal } from './Overlays';
@@ -104,7 +104,7 @@ export class HUD {
       setWarp: (w) => this.setWarp(w),
     });
     this.manual = new ManualHud(actions);
-    this.help = new HelpOverlay(() => this.setHelp(false), CREDITS_FULL);
+    this.help = new HelpOverlay(() => this.setHelp(false), CREDITS_FULL, authorCredit());
     this.summary = new SummaryModal(actions, CREDIT_EOX + '  ·  Earth imagery: NASA', {
       replay: () => { this.summary.open = false; this.startReplay(); },
       close: () => { this.summary.open = false; },
@@ -119,7 +119,7 @@ export class HUD {
     this.sumPill.addEventListener('mousedown', (e) => e.preventDefault());
     this.sumPill.addEventListener('click', () => this.openSummary());
 
-    this.root = h('div', { class: 'f9ui' + (this.hidden ? ' hud-off' : '') + (this.min ? ' hud-min' : '') },
+    this.root = h('div', { class: 'f9ui' + (this.hidden ? ' hud-off' : '') + (this.min ? ' hud-min' : '') + (params.has('shot') ? ' is-shot' : '') },
       this.band, this.captions.el, this.captions.titleEl, this.manual.panel,
       this.badge, this.sumPill, this.controls.el, this.photo.el, this.sound.el, this.summary.el, this.help.el);
     if (this.min) {
@@ -302,7 +302,7 @@ export class HUD {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     if (isTypingTarget(e.target)) return;
     const tgt = e.target as HTMLElement | null;
-    const onControl = !!tgt && (tgt.tagName === 'BUTTON' || tgt.tagName === 'INPUT');
+    const onControl = !!tgt && (tgt.tagName === 'BUTTON' || tgt.tagName === 'INPUT' || tgt.tagName === 'A');
     if (onControl && (e.key === ' ' || e.key === 'Enter')) return; // let the focused control activate
     if (onControl && tgt!.tagName === 'INPUT' && e.key.startsWith('Arrow')) return; // slider nudges
 
